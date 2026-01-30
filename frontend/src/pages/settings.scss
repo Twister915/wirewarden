@@ -1,0 +1,70 @@
+.settings-page {
+  h1 {
+    margin-bottom: 1.5rem;
+  }
+
+  .passkey-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1rem;
+
+    li {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #333;
+
+      .passkey-name {
+        flex: 1;
+      }
+
+      input {
+        flex: 1;
+        padding: 0.25rem 0.5rem;
+        border: 1px solid #444;
+        border-radius: 4px;
+        background: #1a1a1a;
+        color: inherit;
+      }
+
+      .date {
+        font-size: 0.75rem;
+        color: #888;
+      }
+
+      button {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.8rem;
+      }
+    }
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .error {
+    color: #f44;
+    font-size: 0.875rem;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .settings-page {
+    .passkey-list li {
+      border-color: #ddd;
+
+      input {
+        background: #fff;
+        border-color: #ccc;
+      }
+    }
+
+    .error {
+      color: #c00;
+    }
+  }
+}
