@@ -16,15 +16,13 @@ wirewarden-types = { path = "../wirewarden-types" }
 actix-web = "4"
 tracing-actix-web = "0.7"
 argon2 = "0.5"
+dotenvy.workspace = true
+sqlx.workspace = true
 jsonwebtoken = "10"
 
 [dependencies.tracing-subscriber]
 version = "0.3"
 features = ["env-filter", "json"]
-
-[dependencies.diesel]
-version = "2"
-features = ["postgres", "uuid", "chrono", "serde_json", "r2d2"]
 
 [dev-dependencies]
 test-case.workspace = true
