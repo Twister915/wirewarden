@@ -1,3 +1,17 @@
+// Copyright (C) 2025 Joseph Sacchini
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU Affero General Public License as published by the Free
+// Software Foundation, version 3.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+// details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 use actix_web::{web, HttpResponse};
 
 use crate::db::vpn::{self, VpnStore};
@@ -40,17 +54,28 @@ async fn daemon_config(
     )
     .await?;
 
-    let key_ids: Vec<_> = servers
+    let other_servers: Vec<_> = servers.iter().filter(|s| s.id != server.id).collect();
+
+    let key_ids: Vec<_> = other_servers
         .iter()
-        .filter(|s| s.id != server.id)
         .map(|s| s.key_id)
         .chain(clients.iter().map(|c| c.key_id))
         .collect();
     let keys = store.get_keys_batch(&key_ids).await?;
 
+    let route_lists = futures::future::try_join_all(
+        other_servers.iter().map(|s| store.list_routes_by_server(s.id)),
+    )
+    .await?;
+    let server_routes: std::collections::HashMap<_, _> = other_servers
+        .iter()
+        .map(|s| s.id)
+        .zip(route_lists)
+        .collect();
+
     let mut peers = Vec::with_capacity(key_ids.len());
 
-    for other in servers.iter().filter(|s| s.id != server.id) {
+    for other in &other_servers {
         let key = &keys[&other.key_id];
         let ip = vpn::compute_address(&network, other.address_offset);
         let endpoint = other
@@ -58,9 +83,16 @@ async fn daemon_config(
             .as_ref()
             .map(|h| format!("{h}:{}", other.endpoint_port));
 
+        let mut allowed_ips = vec![format!("{ip}/32")];
+        if let Some(routes) = server_routes.get(&other.id) {
+            for route in routes {
+                allowed_ips.push(route.route_cidr.to_string());
+            }
+        }
+
         peers.push(DaemonPeer {
             public_key: key.public_key.clone(),
-            allowed_ips: vec![format!("{ip}/32")],
+            allowed_ips,
             endpoint,
         });
     }
