@@ -43,7 +43,7 @@ impl Platform for MockPlatform {
         Ok(())
     }
 
-    async fn apply_config(name: &str, _config: &DaemonConfig) -> Result<(), PlatformError> {
+    async fn apply_config(name: &str, _config: &DaemonConfig, _prev: Option<&DaemonConfig>) -> Result<(), PlatformError> {
         APPLIED.lock().unwrap().push(name.to_string());
         Ok(())
     }
@@ -86,6 +86,7 @@ fn sample_daemon_config() -> DaemonConfig {
             id: Uuid::new_v4(),
             name: "test-network".into(),
             cidr: "10.0.0.0/24".into(),
+            persistent_keepalive: 25,
         },
         peers: vec![DaemonPeer {
             public_key: "Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYWE=".into(),
@@ -151,7 +152,8 @@ async fn reconcile_applies_config_from_api() {
     let mut interfaces = vec!["wg0".to_string()];
 
     let client = reqwest::Client::new();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces).await;
+    let mut state = reconcile::ReconcileState::default();
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
 
     assert_eq!(applied(), vec!["wg0"]);
     assert!(removed().is_empty());
@@ -184,7 +186,8 @@ async fn reconcile_multiple_servers() {
     let mut interfaces = vec!["wg0".to_string(), "wg1".to_string()];
 
     let client = reqwest::Client::new();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces).await;
+    let mut state = reconcile::ReconcileState::default();
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
 
     let mut apps = applied();
     apps.sort();
@@ -213,7 +216,8 @@ async fn reconcile_removes_server_on_401() {
     let mut interfaces = vec!["wg0".to_string()];
 
     let client = reqwest::Client::new();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces).await;
+    let mut state = reconcile::ReconcileState::default();
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
 
     assert!(applied().is_empty(), "should not apply config on 401");
     assert_eq!(removed(), vec!["wg0"], "should tear down interface");
@@ -244,7 +248,8 @@ async fn reconcile_removes_server_on_404() {
     let mut interfaces = vec!["wg0".to_string()];
 
     let client = reqwest::Client::new();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces).await;
+    let mut state = reconcile::ReconcileState::default();
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
 
     assert!(applied().is_empty());
     assert_eq!(removed(), vec!["wg0"]);
@@ -269,7 +274,8 @@ async fn reconcile_keeps_server_on_transient_error() {
     let mut interfaces = vec!["wg0".to_string()];
 
     let client = reqwest::Client::new();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces).await;
+    let mut state = reconcile::ReconcileState::default();
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
 
     assert!(applied().is_empty());
     assert!(removed().is_empty());
@@ -303,7 +309,8 @@ async fn reconcile_mixed_success_and_gone() {
     let mut interfaces = vec!["wg0".to_string(), "wg1".to_string()];
 
     let client = reqwest::Client::new();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces).await;
+    let mut state = reconcile::ReconcileState::default();
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
 
     assert_eq!(applied(), vec!["wg0"]);
     assert_eq!(removed(), vec!["wg1"]);

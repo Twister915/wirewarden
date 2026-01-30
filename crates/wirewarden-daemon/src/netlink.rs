@@ -47,6 +47,7 @@ pub trait Platform {
     fn apply_config(
         name: &str,
         config: &DaemonConfig,
+        prev: Option<&DaemonConfig>,
     ) -> impl Future<Output = Result<(), PlatformError>> + Send;
     fn interface_exists(name: &str) -> impl Future<Output = Result<bool, PlatformError>> + Send;
 }
@@ -94,7 +95,11 @@ impl Platform for StubPlatform {
         Err(PlatformError::Unsupported)
     }
 
-    async fn apply_config(_name: &str, _config: &DaemonConfig) -> Result<(), PlatformError> {
+    async fn apply_config(
+        _name: &str,
+        _config: &DaemonConfig,
+        _prev: Option<&DaemonConfig>,
+    ) -> Result<(), PlatformError> {
         Err(PlatformError::Unsupported)
     }
 
@@ -107,13 +112,14 @@ impl Platform for StubPlatform {
 
 #[cfg(target_os = "linux")]
 pub mod linux {
+    use std::collections::HashMap;
     use std::net::{IpAddr, SocketAddr};
 
     use futures::TryStreamExt;
     use tracing::{debug, info};
     use wireguard_uapi::{RouteSocket, WgSocket, set};
 
-    use wirewarden_types::daemon::DaemonConfig;
+    use wirewarden_types::daemon::{DaemonConfig, DaemonPeer};
 
     use super::{Platform, PlatformError, decode_key, parse_cidr};
 
@@ -151,12 +157,42 @@ pub mod linux {
             Ok(())
         }
 
-        async fn apply_config(name: &str, config: &DaemonConfig) -> Result<(), PlatformError> {
-            Self::ensure_interface(name).await?;
-            apply_device_config(name, config)?;
-            assign_address(name, &config.server.address).await?;
-            set_link_up(name).await?;
-            info!(interface = name, server = %config.server.name, "applied configuration");
+        async fn apply_config(
+            name: &str,
+            config: &DaemonConfig,
+            prev: Option<&DaemonConfig>,
+        ) -> Result<(), PlatformError> {
+            let created = !Self::interface_exists(name).await?;
+            if created {
+                Self::ensure_interface(name).await?;
+            }
+
+            match prev {
+                Some(prev) if !created => {
+                    apply_config_diff(name, prev, config)?;
+
+                    if prev.server.address != config.server.address {
+                        assign_address(name, &config.server.address).await?;
+                    }
+
+                    info!(
+                        interface = name,
+                        server = %config.server.name,
+                        "applied differential configuration"
+                    );
+                }
+                _ => {
+                    apply_device_config(name, config)?;
+                    assign_address(name, &config.server.address).await?;
+                    set_link_up(name).await?;
+                    info!(
+                        interface = name,
+                        server = %config.server.name,
+                        "applied full configuration"
+                    );
+                }
+            }
+
             Ok(())
         }
 
@@ -237,6 +273,209 @@ pub mod linux {
             peer_count = config.peers.len(),
             "applied wireguard device config"
         );
+        Ok(())
+    }
+
+    fn apply_config_diff(
+        name: &str,
+        prev: &DaemonConfig,
+        next: &DaemonConfig,
+    ) -> Result<(), PlatformError> {
+        let key_changed = prev.server.private_key != next.server.private_key;
+        let port_changed = prev.server.listen_port != next.server.listen_port;
+
+        if key_changed || port_changed {
+            set_device_key_port(name, next)?;
+        }
+
+        let prev_peers: HashMap<&str, &DaemonPeer> = prev
+            .peers
+            .iter()
+            .map(|p| (p.public_key.as_str(), p))
+            .collect();
+        let next_peers: HashMap<&str, &DaemonPeer> = next
+            .peers
+            .iter()
+            .map(|p| (p.public_key.as_str(), p))
+            .collect();
+
+        let added: Vec<&DaemonPeer> = next_peers
+            .iter()
+            .filter(|(k, _)| !prev_peers.contains_key(*k))
+            .map(|(_, p)| *p)
+            .collect();
+
+        let removed: Vec<&str> = prev_peers
+            .keys()
+            .filter(|k| !next_peers.contains_key(*k))
+            .copied()
+            .collect();
+
+        let updated: Vec<&DaemonPeer> = next_peers
+            .iter()
+            .filter(|(k, p)| {
+                prev_peers.get(*k).is_some_and(|old| old != p)
+            })
+            .map(|(_, p)| *p)
+            .collect();
+
+        if !added.is_empty() {
+            debug!(interface = name, count = added.len(), "adding peers");
+            add_peers(name, &added, next.network.persistent_keepalive)?;
+        }
+
+        if !removed.is_empty() {
+            debug!(interface = name, count = removed.len(), "removing peers");
+            remove_peers(name, &removed)?;
+        }
+
+        if !updated.is_empty() {
+            debug!(interface = name, count = updated.len(), "updating peers");
+            update_peers(name, &updated, next.network.persistent_keepalive)?;
+        }
+
+        if added.is_empty() && removed.is_empty() && updated.is_empty()
+            && !key_changed && !port_changed
+        {
+            debug!(interface = name, "no device-level changes needed");
+        }
+
+        Ok(())
+    }
+
+    fn set_device_key_port(name: &str, config: &DaemonConfig) -> Result<(), PlatformError> {
+        let private_key = decode_key(&config.server.private_key)?;
+        let listen_port = config.server.listen_port as u16;
+
+        let dev = set::Device::from_ifname(name)
+            .private_key(&private_key)
+            .listen_port(listen_port);
+
+        let mut wg = WgSocket::connect()
+            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        wg.set_device(dev)
+            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+
+        debug!(interface = name, listen_port, "updated device key/port");
+        Ok(())
+    }
+
+    fn build_peer_owned(
+        peer: &DaemonPeer,
+        persistent_keepalive: i32,
+    ) -> Result<PeerOwned, PlatformError> {
+        let pub_key = decode_key(&peer.public_key)?;
+        let endpoint: Option<SocketAddr> = peer
+            .endpoint
+            .as_deref()
+            .and_then(|ep| ep.parse().ok());
+        let allowed_ips: Vec<(IpAddr, u8)> = peer
+            .allowed_ips
+            .iter()
+            .map(|ip| parse_cidr(ip))
+            .collect::<Result<_, _>>()?;
+        Ok(PeerOwned { pub_key, endpoint, allowed_ips, persistent_keepalive })
+    }
+
+    fn build_set_peer<'a>(
+        p: &'a PeerOwned,
+        flags: Vec<set::WgPeerF>,
+    ) -> set::Peer<'a> {
+        let mut peer = set::Peer::from_public_key(&p.pub_key)
+            .flags(flags);
+
+        if let Some(ref ep) = p.endpoint {
+            peer = peer.endpoint(ep);
+        }
+
+        let allowed: Vec<set::AllowedIp<'_>> = p
+            .allowed_ips
+            .iter()
+            .map(|(addr, cidr)| {
+                let mut aip = set::AllowedIp::from_ipaddr(addr);
+                aip.cidr_mask = Some(*cidr);
+                aip
+            })
+            .collect();
+
+        if p.persistent_keepalive > 0 {
+            peer = peer.persistent_keepalive_interval(p.persistent_keepalive as u16);
+        }
+
+        peer.allowed_ips(allowed)
+    }
+
+    fn add_peers(
+        name: &str,
+        peers: &[&DaemonPeer],
+        persistent_keepalive: i32,
+    ) -> Result<(), PlatformError> {
+        let owned: Vec<PeerOwned> = peers
+            .iter()
+            .map(|p| build_peer_owned(p, persistent_keepalive))
+            .collect::<Result<_, _>>()?;
+
+        let set_peers: Vec<set::Peer<'_>> = owned
+            .iter()
+            .map(|p| build_set_peer(p, vec![set::WgPeerF::ReplaceAllowedIps]))
+            .collect();
+
+        let dev = set::Device::from_ifname(name).peers(set_peers);
+
+        let mut wg = WgSocket::connect()
+            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        wg.set_device(dev)
+            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        Ok(())
+    }
+
+    fn remove_peers(name: &str, pub_keys: &[&str]) -> Result<(), PlatformError> {
+        let keys: Vec<[u8; 32]> = pub_keys
+            .iter()
+            .map(|k| decode_key(k))
+            .collect::<Result<_, _>>()?;
+
+        let set_peers: Vec<set::Peer<'_>> = keys
+            .iter()
+            .map(|k| {
+                set::Peer::from_public_key(k)
+                    .flags(vec![set::WgPeerF::RemoveMe])
+            })
+            .collect();
+
+        let dev = set::Device::from_ifname(name).peers(set_peers);
+
+        let mut wg = WgSocket::connect()
+            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        wg.set_device(dev)
+            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        Ok(())
+    }
+
+    fn update_peers(
+        name: &str,
+        peers: &[&DaemonPeer],
+        persistent_keepalive: i32,
+    ) -> Result<(), PlatformError> {
+        let owned: Vec<PeerOwned> = peers
+            .iter()
+            .map(|p| build_peer_owned(p, persistent_keepalive))
+            .collect::<Result<_, _>>()?;
+
+        let set_peers: Vec<set::Peer<'_>> = owned
+            .iter()
+            .map(|p| build_set_peer(p, vec![
+                set::WgPeerF::UpdateOnly,
+                set::WgPeerF::ReplaceAllowedIps,
+            ]))
+            .collect();
+
+        let dev = set::Device::from_ifname(name).peers(set_peers);
+
+        let mut wg = WgSocket::connect()
+            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        wg.set_device(dev)
+            .map_err(|e| PlatformError::Interface(e.to_string()))?;
         Ok(())
     }
 

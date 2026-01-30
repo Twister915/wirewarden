@@ -128,6 +128,12 @@
     }
   }
 
+  .qr-code {
+    display: block;
+    margin-bottom: 1rem;
+    border-radius: 4px;
+  }
+
   .config-preview {
     background: #111;
     border: 1px solid #333;

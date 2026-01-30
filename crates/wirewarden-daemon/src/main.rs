@@ -118,6 +118,7 @@ async fn run_daemon(
 
     let client = reqwest::Client::new();
     let interval = Duration::from_secs(interval_secs);
+    let mut reconcile_state = reconcile::ReconcileState::default();
 
     let mut shutdown = std::pin::pin!(shutdown_signal());
 
@@ -133,6 +134,7 @@ async fn run_daemon(
             &config_path,
             &mut daemon_config,
             &mut interfaces,
+            &mut reconcile_state,
         )
         .await;
 

@@ -846,6 +846,7 @@ mod tests {
             cidr_prefix: v4.prefix() as i32,
             owner_id: None,
             dns_servers: dns.iter().map(|s| s.to_string()).collect(),
+            persistent_keepalive: 25,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

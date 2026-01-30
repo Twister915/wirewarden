@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
+import QRCode from 'qrcode';
 import { vpnApi, type ClientResponse, ApiError } from '../api';
 import './vpn.scss';
 
@@ -24,6 +25,8 @@ export function ClientDetailPage() {
   const [configLoaded, setConfigLoaded] = useState(false);
   const [forwardInternet, setForwardInternet] = useState(false);
   const [error, setError] = useState('');
+  const [showQr, setShowQr] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState('');
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -47,6 +50,15 @@ export function ClientDetailPage() {
       setError(err instanceof ApiError ? err.message : 'Failed to load config');
     }
   }, [id]);
+
+  useEffect(() => {
+    if (!showQr || !config) { setQrDataUrl(''); return; }
+    let cancelled = false;
+    QRCode.toDataURL(config, { errorCorrectionLevel: 'L', margin: 2, width: 300 })
+      .then((url) => { if (!cancelled) setQrDataUrl(url); })
+      .catch(() => { if (!cancelled) setError('Failed to generate QR code'); });
+    return () => { cancelled = true; };
+  }, [showQr, config]);
 
   function handleToggleForward(checked: boolean) {
     setForwardInternet(checked);
@@ -90,7 +102,14 @@ export function ClientDetailPage() {
         </label>
         <button type="button" onClick={() => fetchConfig(forwardInternet)}>Load config</button>
         {config && <button type="button" onClick={handleDownload}>Download</button>}
+        {config && (
+          <button type="button" onClick={() => setShowQr((v) => !v)}>
+            {showQr ? 'Hide QR code' : 'Show QR code'}
+          </button>
+        )}
       </div>
+
+      {qrDataUrl && <img src={qrDataUrl} alt="WireGuard config QR code" className="qr-code" />}
 
       {config && <pre className="config-preview">{config}</pre>}
 

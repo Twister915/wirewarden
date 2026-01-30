@@ -12,14 +12,22 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use reqwest::Client;
 use tracing::{debug, error, info, warn};
+use wirewarden_types::daemon::DaemonConfig;
 
 use crate::api;
 use crate::config::{self, DaemonToml, ServerEntry};
 use crate::netlink::{Platform, PlatformError};
+
+/// Tracks previously applied configs per interface so we can skip no-op cycles.
+#[derive(Debug, Default)]
+pub struct ReconcileState {
+    applied: HashMap<String, DaemonConfig>,
+}
 
 /// Run one reconciliation cycle for all configured servers.
 ///
@@ -33,6 +41,7 @@ pub async fn reconcile_all<P: Platform>(
     config_path: &Path,
     config: &mut DaemonToml,
     interfaces: &mut Vec<String>,
+    state: &mut ReconcileState,
 ) {
     let server_count = config.servers.len();
     info!(server_count, "starting reconciliation cycle");
@@ -53,7 +62,7 @@ pub async fn reconcile_all<P: Platform>(
             i + 1,
         );
 
-        if let Err(e) = reconcile_one::<P>(client, entry, interface).await {
+        if let Err(e) = reconcile_one::<P>(client, entry, interface, state).await {
             if e.is_gone() {
                 warn!(
                     interface = %interface,
@@ -78,7 +87,8 @@ pub async fn reconcile_all<P: Platform>(
         info!(count = to_remove.len(), "removing gone server entries from config");
         for &i in to_remove.iter().rev() {
             let removed = config.servers.remove(i);
-            interfaces.remove(i);
+            let iface = interfaces.remove(i);
+            state.applied.remove(&iface);
             info!(
                 api_host = %removed.api_host,
                 "removed server entry from config"
@@ -114,15 +124,26 @@ async fn reconcile_one<P: Platform>(
     client: &Client,
     entry: &ServerEntry,
     interface: &str,
+    state: &mut ReconcileState,
 ) -> Result<(), ReconcileError> {
     let daemon_config = api::fetch_config(client, entry).await?;
+
+    if state.applied.get(interface) == Some(&daemon_config) {
+        debug!(
+            interface,
+            server = %daemon_config.server.name,
+            "config unchanged, skipping"
+        );
+        return Ok(());
+    }
 
     debug!(
         interface,
         server = %daemon_config.server.name,
         "applying config to interface"
     );
-    P::apply_config(interface, &daemon_config).await?;
+    let prev = state.applied.get(interface).map(|c| c as &DaemonConfig);
+    P::apply_config(interface, &daemon_config, prev).await?;
 
     info!(
         interface,
@@ -130,5 +151,6 @@ async fn reconcile_one<P: Platform>(
         peer_count = daemon_config.peers.len(),
         "interface configured successfully"
     );
+    state.applied.insert(interface.to_owned(), daemon_config);
     Ok(())
 }

@@ -15,14 +15,14 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct DaemonConfig {
     pub server: DaemonServerInfo,
     pub network: DaemonNetworkInfo,
     pub peers: Vec<DaemonPeer>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct DaemonServerInfo {
     pub id: Uuid,
     pub name: String,
@@ -32,7 +32,7 @@ pub struct DaemonServerInfo {
     pub listen_port: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct DaemonNetworkInfo {
     pub id: Uuid,
     pub name: String,
@@ -40,7 +40,7 @@ pub struct DaemonNetworkInfo {
     pub persistent_keepalive: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct DaemonPeer {
     pub public_key: String,
     pub allowed_ips: Vec<String>,
