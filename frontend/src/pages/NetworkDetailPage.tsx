@@ -17,9 +17,10 @@ export function NetworkDetailPage() {
   const [clients, setClients] = useState<ClientResponse[]>([]);
   const [error, setError] = useState('');
 
-  // DNS editing
-  const [editingDns, setEditingDns] = useState(false);
+  // Network settings editing
+  const [editingSettings, setEditingSettings] = useState(false);
   const [dnsServers, setDnsServers] = useState<string[]>([]);
+  const [keepalive, setKeepalive] = useState('25');
 
   // Server form
   const [sName, setSName] = useState('');
@@ -48,21 +49,25 @@ export function NetworkDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  function startEditDns() {
+  function startEditSettings() {
     if (!network) return;
     setDnsServers([...network.dns_servers]);
-    setEditingDns(true);
+    setKeepalive(String(network.persistent_keepalive));
+    setEditingSettings(true);
   }
 
-  async function handleSaveDns() {
+  async function handleSaveSettings() {
     if (!id) return;
     setError('');
     try {
-      const updated = await vpnApi.updateNetworkDns(id, dnsServers);
+      const updated = await vpnApi.updateNetwork(id, {
+        dns_servers: dnsServers,
+        persistent_keepalive: Number(keepalive),
+      });
       setNetwork(updated);
-      setEditingDns(false);
+      setEditingSettings(false);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to update DNS');
+      setError(err instanceof ApiError ? err.message : 'Failed to update network');
     }
   }
 
@@ -134,23 +139,29 @@ export function NetworkDetailPage() {
         <dd>{network.cidr}</dd>
         <dt>DNS</dt>
         <dd>
-          {editingDns ? (
-            <div>
-              <DnsListEditor value={dnsServers} onChange={setDnsServers} />
-              <div className="form-row">
-                <button type="button" onClick={handleSaveDns}>Save</button>
-                <button type="button" onClick={() => setEditingDns(false)}>Cancel</button>
-              </div>
-            </div>
+          {editingSettings ? (
+            <DnsListEditor value={dnsServers} onChange={setDnsServers} />
           ) : (
-            <>
-              {network.dns_servers.join(', ') || '—'}
-              {' '}
-              <button type="button" onClick={startEditDns}>Edit</button>
-            </>
+            network.dns_servers.join(', ') || '—'
+          )}
+        </dd>
+        <dt>Keepalive</dt>
+        <dd>
+          {editingSettings ? (
+            <input type="number" min="0" max="65535" value={keepalive} onChange={(e) => setKeepalive(e.target.value)} />
+          ) : (
+            network.persistent_keepalive > 0 ? `${network.persistent_keepalive}s` : 'off'
           )}
         </dd>
       </dl>
+      {editingSettings ? (
+        <div className="form-row">
+          <button type="button" onClick={handleSaveSettings}>Save</button>
+          <button type="button" onClick={() => setEditingSettings(false)}>Cancel</button>
+        </div>
+      ) : (
+        <button type="button" onClick={startEditSettings}>Edit settings</button>
+      )}
 
       <h2>Servers</h2>
       {servers.length > 0 ? (

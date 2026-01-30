@@ -28,6 +28,12 @@ struct CreateNetworkRequest {
     name: String,
     cidr: String,
     dns_servers: Vec<String>,
+    #[serde(default = "default_keepalive")]
+    persistent_keepalive: i32,
+}
+
+fn default_keepalive() -> i32 {
+    25
 }
 
 #[derive(Debug, Serialize)]
@@ -36,6 +42,7 @@ struct NetworkResponse {
     name: String,
     cidr: String,
     dns_servers: Vec<String>,
+    persistent_keepalive: i32,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -48,6 +55,7 @@ impl NetworkResponse {
             name: n.name,
             cidr,
             dns_servers: n.dns_servers,
+            persistent_keepalive: n.persistent_keepalive,
             created_at: n.created_at,
             updated_at: n.updated_at,
         }
@@ -90,7 +98,7 @@ async fn create_network(
 
     let prefix = cidr.prefix() as i32;
     let network = store
-        .create_network(&body.name, cidr, prefix, None, &body.dns_servers)
+        .create_network(&body.name, cidr, prefix, None, &body.dns_servers, body.persistent_keepalive)
         .await?;
 
     Ok(HttpResponse::Created().json(NetworkResponse::from_model(network)))
@@ -109,6 +117,8 @@ async fn get_network(
 #[derive(Debug, Deserialize)]
 struct UpdateNetworkRequest {
     dns_servers: Vec<String>,
+    #[serde(default = "default_keepalive")]
+    persistent_keepalive: i32,
 }
 
 async fn update_network(
@@ -120,7 +130,7 @@ async fn update_network(
     validate_dns_servers(&body.dns_servers)?;
     let id = path.into_inner();
     let network = store
-        .update_network_dns(id, &body.dns_servers)
+        .update_network_settings(id, &body.dns_servers, body.persistent_keepalive)
         .await?
         .ok_or(ApiError::NotFound)?;
     Ok(HttpResponse::Ok().json(NetworkResponse::from_model(network)))

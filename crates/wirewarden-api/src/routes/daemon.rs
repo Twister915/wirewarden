@@ -31,6 +31,7 @@ async fn daemon_config(
         id: network.id,
         name: network.name.clone(),
         cidr,
+        persistent_keepalive: network.persistent_keepalive,
     };
 
     let (servers, clients) = futures::future::try_join(

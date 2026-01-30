@@ -24,6 +24,7 @@ pub struct Network {
     pub cidr_prefix: i32,
     pub owner_id: Option<Uuid>,
     pub dns_servers: Vec<String>,
+    pub persistent_keepalive: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -206,10 +207,11 @@ impl VpnStore {
         cidr_prefix: i32,
         owner_id: Option<Uuid>,
         dns_servers: &[String],
+        persistent_keepalive: i32,
     ) -> Result<Network> {
         sqlx::query_as::<_, Network>(
-            "INSERT INTO networks (name, cidr_ip, cidr_prefix, owner_id, dns_servers)
-             VALUES ($1, $2, $3, $4, $5)
+            "INSERT INTO networks (name, cidr_ip, cidr_prefix, owner_id, dns_servers, persistent_keepalive)
+             VALUES ($1, $2, $3, $4, $5, $6)
              RETURNING *",
         )
         .bind(name)
@@ -217,6 +219,7 @@ impl VpnStore {
         .bind(cidr_prefix)
         .bind(owner_id)
         .bind(dns_servers)
+        .bind(persistent_keepalive)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| match &e {
@@ -225,6 +228,25 @@ impl VpnStore {
             }
             _ => VpnStoreError::Database(e),
         })
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn update_network_settings(
+        &self,
+        id: Uuid,
+        dns_servers: &[String],
+        persistent_keepalive: i32,
+    ) -> Result<Option<Network>> {
+        sqlx::query_as::<_, Network>(
+            "UPDATE networks SET dns_servers = $2, persistent_keepalive = $3, updated_at = now()
+             WHERE id = $1 RETURNING *",
+        )
+        .bind(id)
+        .bind(dns_servers)
+        .bind(persistent_keepalive)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Into::into)
     }
 
     #[tracing::instrument(skip(self))]
@@ -242,22 +264,6 @@ impl VpnStore {
             .fetch_all(&self.pool)
             .await
             .map_err(Into::into)
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn update_network_dns(
-        &self,
-        id: Uuid,
-        dns_servers: &[String],
-    ) -> Result<Option<Network>> {
-        sqlx::query_as::<_, Network>(
-            "UPDATE networks SET dns_servers = $2, updated_at = now() WHERE id = $1 RETURNING *",
-        )
-        .bind(id)
-        .bind(dns_servers)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(Into::into)
     }
 
     #[tracing::instrument(skip(self))]
@@ -748,6 +754,9 @@ impl WgClient {
             writeln!(config, "PublicKey = {}", server_key.public_key).unwrap();
             writeln!(config, "Endpoint = {endpoint_host}:{}", server.endpoint_port).unwrap();
             writeln!(config, "AllowedIPs = {}", allowed_ips.join(", ")).unwrap();
+            if snapshot.network.persistent_keepalive > 0 {
+                writeln!(config, "PersistentKeepalive = {}", snapshot.network.persistent_keepalive).unwrap();
+            }
         }
 
         config

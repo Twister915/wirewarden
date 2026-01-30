@@ -25,13 +25,10 @@ export function LoginPage() {
 
   async function handlePasskeyLogin() {
     setError('');
-    const name = username || prompt('Username:');
-    if (!name) return;
-
     try {
-      const opts = await passkeyApi.loginBegin(name);
+      const opts = await passkeyApi.loginBegin();
       const credential = await startAuthentication({ optionsJSON: opts.publicKey });
-      await passkeyApi.loginFinish(opts.user_id, credential);
+      await passkeyApi.loginFinish(opts.session_id, credential);
       await refresh();
       navigate('/');
     } catch (err) {

@@ -1,6 +1,5 @@
-use std::time::Instant;
-
-use dashmap::DashMap;
+use sqlx::PgPool;
+use uuid::Uuid;
 use webauthn_rs::prelude::*;
 use webauthn_rs::WebauthnBuilder;
 
@@ -17,36 +16,54 @@ pub fn build_webauthn(config: &Config) -> Webauthn {
         .expect("failed to finalize Webauthn")
 }
 
-/// In-memory store for WebAuthn challenge state with a 5-minute TTL.
-#[derive(Debug)]
+/// PostgreSQL-backed store for WebAuthn challenge state with a 5-minute TTL.
+#[derive(Debug, Clone)]
 pub struct ChallengeStore {
-    inner: DashMap<String, (serde_json::Value, Instant)>,
+    pool: PgPool,
 }
 
 impl ChallengeStore {
-    pub fn new() -> Self {
-        Self {
-            inner: DashMap::new(),
-        }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
-    pub fn insert(&self, key: String, state: serde_json::Value) {
-        self.cleanup();
-        self.inner.insert(key, (state, Instant::now()));
+    pub async fn insert(
+        &self,
+        session_id: Uuid,
+        state: serde_json::Value,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO webauthn_challenges (session_id, state) \
+             VALUES ($1, $2) \
+             ON CONFLICT (session_id) DO UPDATE SET state = $2, created_at = now()",
+        )
+        .bind(session_id)
+        .bind(&state)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
-    pub fn take(&self, key: &str) -> Option<serde_json::Value> {
-        self.inner.remove(key).and_then(|(_, (state, created))| {
-            if created.elapsed().as_secs() < 300 {
-                Some(state)
-            } else {
-                None
-            }
-        })
+    /// SELECT + DELETE in one query, returning `None` if missing or older than 5 minutes.
+    pub async fn take(&self, session_id: Uuid) -> Result<Option<serde_json::Value>, sqlx::Error> {
+        let row: Option<(serde_json::Value,)> = sqlx::query_as(
+            "DELETE FROM webauthn_challenges \
+             WHERE session_id = $1 AND created_at > now() - interval '5 minutes' \
+             RETURNING state",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(state,)| state))
     }
 
-    fn cleanup(&self) {
-        self.inner
-            .retain(|_, (_, created)| created.elapsed().as_secs() < 300);
+    /// Delete rows older than 5 minutes.
+    pub async fn cleanup(&self) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            "DELETE FROM webauthn_challenges WHERE created_at < now() - interval '5 minutes'",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 }

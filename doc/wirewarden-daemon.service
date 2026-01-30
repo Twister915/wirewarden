@@ -1,0 +1,13 @@
+[Unit]
+Description=Wirewarden WireGuard Configuration Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wirewarden daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

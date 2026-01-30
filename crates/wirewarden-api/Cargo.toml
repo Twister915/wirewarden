@@ -14,17 +14,17 @@ uuid.workspace = true
 chrono.workspace = true
 wirewarden-types = { path = "../wirewarden-types" }
 actix-web = "4"
-tracing-actix-web = "0.7"
 argon2 = "0.5"
 dotenvy.workspace = true
 sqlx.workspace = true
+openssl.workspace = true
 webauthn-rs.workspace = true
-dashmap.workspace = true
 ipnetwork.workspace = true
 x25519-dalek.workspace = true
 aes-gcm.workspace = true
 rand = "0.8"
 base64 = "0.22"
+url = "2"
 futures = "0.3"
 
 [dependencies.jsonwebtoken]

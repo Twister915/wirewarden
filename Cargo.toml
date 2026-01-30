@@ -16,9 +16,13 @@ dotenvy = "0.15"
 dashmap = "6"
 ipnetwork = "0.20"
 
+[workspace.dependencies.openssl]
+version = "0.10"
+features = ["vendored"]
+
 [workspace.dependencies.webauthn-rs]
 version = "0.5"
-features = ["danger-allow-state-serialisation"]
+features = ["danger-allow-state-serialisation", "conditional-ui"]
 
 [workspace.dependencies.x25519-dalek]
 version = "2"
@@ -37,7 +41,7 @@ features = ["derive"]
 
 [workspace.dependencies.tokio]
 version = "1"
-features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"]
+features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util", "signal"]
 
 [workspace.dependencies.uuid]
 version = "1"

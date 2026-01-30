@@ -1,6 +1,7 @@
 use std::env;
 
 use thiserror::Error;
+use url::Url;
 
 #[derive(Debug)]
 pub struct Config {
@@ -10,6 +11,7 @@ pub struct Config {
     pub webauthn_rp_id: String,
     pub webauthn_rp_origin: String,
     pub wg_key_secret: [u8; 32],
+    pub public_url: String,
 }
 
 #[derive(Debug, Error)]
@@ -19,6 +21,9 @@ pub enum ConfigError {
 
     #[error("WG_KEY_SECRET must be exactly 64 hex characters (32 bytes)")]
     InvalidKeySecret,
+
+    #[error("PUBLIC_URL is not a valid URL")]
+    InvalidPublicUrl,
 }
 
 fn require_env(var: &'static str) -> Result<String, ConfigError> {
@@ -43,15 +48,18 @@ impl Config {
         let wg_key_hex = require_env("WG_KEY_SECRET")?;
         let wg_key_secret = parse_hex_32(&wg_key_hex)?;
 
+        let public_url = require_env("PUBLIC_URL")?;
+        let public_url_parsed =
+            Url::parse(&public_url).map_err(|_| ConfigError::InvalidPublicUrl)?;
+
         Ok(Self {
             database_url: require_env("DATABASE_URL")?,
             bind_addr: env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string()),
             jwt_secret: require_env("JWT_SECRET")?,
-            webauthn_rp_id: env::var("WEBAUTHN_RP_ID")
-                .unwrap_or_else(|_| "localhost".to_string()),
-            webauthn_rp_origin: env::var("WEBAUTHN_RP_ORIGIN")
-                .unwrap_or_else(|_| "http://localhost:5173".to_string()),
             wg_key_secret,
+            public_url: public_url.clone(),
+            webauthn_rp_id: public_url_parsed.host_str().unwrap().to_string(),
+            webauthn_rp_origin: public_url.trim_end_matches('/').to_string(),
         })
     }
 }

@@ -23,6 +23,7 @@ pub struct DaemonNetworkInfo {
     pub id: Uuid,
     pub name: String,
     pub cidr: String,
+    pub persistent_keepalive: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

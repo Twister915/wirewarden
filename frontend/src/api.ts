@@ -92,6 +92,7 @@ export interface NetworkResponse {
   name: string;
   cidr: string;
   dns_servers: string[];
+  persistent_keepalive: number;
   created_at: string;
   updated_at: string;
 }
@@ -100,6 +101,7 @@ export interface CreateNetworkRequest {
   name: string;
   cidr: string;
   dns_servers: string[];
+  persistent_keepalive?: number;
 }
 
 export interface ServerResponse {
@@ -115,6 +117,7 @@ export interface ServerResponse {
   endpoint_port: number;
   created_at: string;
   updated_at: string;
+  connect_command: string | null;
 }
 
 export interface CreateServerRequest {
@@ -166,10 +169,10 @@ export const vpnApi = {
   getNetwork(id: string) {
     return api<NetworkResponse>(`/networks/${id}`);
   },
-  updateNetworkDns(id: string, dns_servers: string[]) {
+  updateNetwork(id: string, data: { dns_servers: string[]; persistent_keepalive: number }) {
     return api<NetworkResponse>(`/networks/${id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ dns_servers }),
+      body: JSON.stringify(data),
     });
   },
   deleteNetwork(id: string) {
@@ -239,21 +242,18 @@ export const passkeyApi = {
     });
   },
 
-  loginBegin(username: string) {
+  loginBegin() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return api<{ publicKey: any; user_id: string }>(
+    return api<{ publicKey: any; session_id: string }>(
       '/auth/passkey/login/begin',
-      {
-        method: 'POST',
-        body: JSON.stringify({ username }),
-      },
+      { method: 'POST' },
     );
   },
 
-  loginFinish(user_id: string, credential: unknown) {
+  loginFinish(session_id: string, credential: unknown) {
     return api<User>('/auth/passkey/login/finish', {
       method: 'POST',
-      body: JSON.stringify({ user_id, credential }),
+      body: JSON.stringify({ session_id, credential }),
     });
   },
 

@@ -3,6 +3,7 @@ mod config;
 mod db;
 mod error;
 mod extract;
+mod middleware;
 mod routes;
 mod webauthn;
 
@@ -68,8 +69,21 @@ async fn main() -> std::io::Result<()> {
     let user_store = UserStore::new(pool.clone());
     seed_admin(&user_store).await;
     let webauthn = webauthn::build_webauthn(&config);
-    let challenge_store = webauthn::ChallengeStore::new();
+    let challenge_store = webauthn::ChallengeStore::new(pool.clone());
     let vpn_store = VpnStore::new(pool.clone(), config.wg_key_secret);
+
+    {
+        let cs = challenge_store.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                if let Err(e) = cs.cleanup().await {
+                    tracing::warn!(error = %e, "webauthn challenge cleanup failed");
+                }
+            }
+        });
+    }
 
     let bind = config.bind_addr.clone();
 
@@ -87,7 +101,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(webauthn_data.clone())
             .app_data(challenge_data.clone())
             .app_data(vpn_data.clone())
-            .wrap(tracing_actix_web::TracingLogger::default())
+            .wrap(middleware::RequestLogger)
             .route("/health", web::get().to(health))
             .configure(routes::auth::configure)
             .configure(routes::networks::configure)

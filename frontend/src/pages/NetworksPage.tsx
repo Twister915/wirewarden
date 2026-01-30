@@ -10,6 +10,7 @@ export function NetworksPage() {
   const [name, setName] = useState('');
   const [cidr, setCidr] = useState('');
   const [dnsServers, setDnsServers] = useState<string[]>([]);
+  const [keepalive, setKeepalive] = useState('25');
 
   const load = useCallback(async () => {
     try {
@@ -29,10 +30,12 @@ export function NetworksPage() {
         name,
         cidr,
         dns_servers: dnsServers,
+        persistent_keepalive: Number(keepalive),
       });
       setName('');
       setCidr('');
       setDnsServers([]);
+      setKeepalive('25');
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create network');
@@ -94,6 +97,10 @@ export function NetworksPage() {
           <label>
             DNS servers
             <DnsListEditor value={dnsServers} onChange={setDnsServers} />
+          </label>
+          <label>
+            Keepalive (s)
+            <input type="number" min="0" max="65535" value={keepalive} onChange={(e) => setKeepalive(e.target.value)} />
           </label>
           <button type="submit">Create</button>
         </div>

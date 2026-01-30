@@ -43,19 +43,19 @@ check_env() {
 cmd_api() {
     check_env
     echo "Starting API server..."
-    cargo run -p wirewarden-api
+    cargo run -p wirewarden-api -- "$@"
 }
 
 cmd_frontend() {
     echo "Starting frontend dev server..."
     cd frontend
     npm install --silent
-    npx vite
+    npx vite --host "$@"
 }
 
 cmd_psql() {
     check_env
-    psql "$DATABASE_URL"
+    psql "$DATABASE_URL" "$@"
 }
 
 cmd_all() {
@@ -80,10 +80,13 @@ cmd_all() {
     wait
 }
 
-case "${1:-}" in
-    api)      cmd_api ;;
-    frontend) cmd_frontend ;;
-    all)      cmd_all ;;
-    psql)     cmd_psql ;;
+CMD="${1:-}"
+shift || true
+
+case "$CMD" in
+    api)      cmd_api "$@" ;;
+    frontend) cmd_frontend "$@" ;;
+    all)      cmd_all "$@" ;;
+    psql)     cmd_psql "$@" ;;
     *)        usage ;;
 esac

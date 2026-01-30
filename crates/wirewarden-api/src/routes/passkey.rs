@@ -11,11 +11,6 @@ use crate::extract::AuthUser;
 use crate::webauthn::ChallengeStore;
 
 #[derive(Debug, Deserialize)]
-pub struct PasskeyLoginBeginRequest {
-    pub username: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct RenameRequest {
     pub name: String,
 }
@@ -78,23 +73,39 @@ async fn register_begin(
         ApiError::Internal
     })?;
 
-    let key = format!("reg:{}", auth.user_id);
-    challenges.insert(key, state_json);
+    let session_id = Uuid::new_v4();
+    challenges.insert(session_id, state_json).await.map_err(|e| {
+        tracing::error!(error = %e, "failed to store registration challenge");
+        ApiError::Internal
+    })?;
 
-    Ok(HttpResponse::Ok().json(ccr))
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "publicKey": ccr.public_key,
+        "session_id": session_id,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterFinishRequest {
+    pub session_id: Uuid,
+    pub credential: RegisterPublicKeyCredential,
 }
 
 #[tracing::instrument(skip(body, webauthn, challenges))]
 async fn register_finish(
     auth: AuthUser,
-    body: web::Json<RegisterPublicKeyCredential>,
+    body: web::Json<RegisterFinishRequest>,
     store: web::Data<UserStore>,
     webauthn: web::Data<Webauthn>,
     challenges: web::Data<ChallengeStore>,
 ) -> Result<HttpResponse, ApiError> {
-    let key = format!("reg:{}", auth.user_id);
     let state_json = challenges
-        .take(&key)
+        .take(body.session_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to fetch registration challenge");
+            ApiError::Internal
+        })?
         .ok_or(ApiError::Validation("no pending registration challenge".into()))?;
 
     let reg_state: PasskeyRegistration = serde_json::from_value(state_json).map_err(|e| {
@@ -103,7 +114,7 @@ async fn register_finish(
     })?;
 
     let passkey = webauthn
-        .finish_passkey_registration(&body, &reg_state)
+        .finish_passkey_registration(&body.credential, &reg_state)
         .map_err(|e| {
             tracing::error!(error = %e, "webauthn registration finish failed");
             ApiError::Validation("passkey registration failed".into())
@@ -134,34 +145,13 @@ async fn register_finish(
 
 #[tracing::instrument(skip(webauthn, challenges))]
 async fn login_begin(
-    body: web::Json<PasskeyLoginBeginRequest>,
-    store: web::Data<UserStore>,
     webauthn: web::Data<Webauthn>,
     challenges: web::Data<ChallengeStore>,
 ) -> Result<HttpResponse, ApiError> {
-    let user = store
-        .get_by_username(&body.username)
-        .await?
-        .ok_or(ApiError::InvalidCredentials)?;
-
-    let db_passkeys = store.get_passkeys(user.id).await?;
-    if db_passkeys.is_empty() {
-        return Err(ApiError::InvalidCredentials);
-    }
-
-    let passkeys: Vec<Passkey> = db_passkeys
-        .iter()
-        .filter_map(|p| serde_json::from_slice(&p.public_key).ok())
-        .collect();
-
-    if passkeys.is_empty() {
-        return Err(ApiError::InvalidCredentials);
-    }
-
     let (rcr, auth_state) = webauthn
-        .start_passkey_authentication(&passkeys)
+        .start_discoverable_authentication()
         .map_err(|e| {
-            tracing::error!(error = %e, "webauthn auth start failed");
+            tracing::error!(error = %e, "webauthn discoverable auth start failed");
             ApiError::Internal
         })?;
 
@@ -170,13 +160,15 @@ async fn login_begin(
         ApiError::Internal
     })?;
 
-    let key = format!("auth:{}", user.id);
-    challenges.insert(key.clone(), state_json);
+    let session_id = Uuid::new_v4();
+    challenges.insert(session_id, state_json).await.map_err(|e| {
+        tracing::error!(error = %e, "failed to store auth challenge");
+        ApiError::Internal
+    })?;
 
-    // Include user_id in response so the finish endpoint knows which challenge to look up
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "publicKey": rcr.public_key,
-        "user_id": user.id,
+        "session_id": session_id,
     })))
 }
 
@@ -188,11 +180,11 @@ async fn login_finish(
     challenges: web::Data<ChallengeStore>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, ApiError> {
-    let user_id: Uuid = body
-        .get("user_id")
+    let session_id: Uuid = body
+        .get("session_id")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok())
-        .ok_or(ApiError::Validation("missing user_id".into()))?;
+        .ok_or(ApiError::Validation("missing session_id".into()))?;
 
     let credential: PublicKeyCredential =
         serde_json::from_value(body.get("credential").cloned().unwrap_or_default()).map_err(
@@ -202,21 +194,52 @@ async fn login_finish(
             },
         )?;
 
-    let key = format!("auth:{user_id}");
+    // The userHandle in the credential response contains the user UUID that was
+    // set during passkey registration. Extract it to look up the user's keys.
+    let user_handle = credential
+        .response
+        .user_handle
+        .as_ref()
+        .ok_or(ApiError::Validation("credential missing userHandle".into()))?;
+    let user_id: Uuid = Uuid::from_slice(user_handle.as_ref()).map_err(|e| {
+        tracing::error!(error = %e, "invalid userHandle in credential");
+        ApiError::InvalidCredentials
+    })?;
+
     let state_json = challenges
-        .take(&key)
+        .take(session_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to fetch auth challenge");
+            ApiError::Internal
+        })?
         .ok_or(ApiError::Validation("no pending auth challenge".into()))?;
 
-    let auth_state: PasskeyAuthentication =
+    let auth_state: DiscoverableAuthentication =
         serde_json::from_value(state_json).map_err(|e| {
             tracing::error!(error = %e, "failed to deserialize auth state");
             ApiError::Internal
         })?;
 
+    // Look up the user's passkeys to verify against
+    let db_passkeys = store.get_passkeys(user_id).await?;
+    let creds: Vec<DiscoverableKey> = db_passkeys
+        .iter()
+        .filter_map(|p| {
+            serde_json::from_slice::<Passkey>(&p.public_key)
+                .ok()
+                .map(DiscoverableKey::from)
+        })
+        .collect();
+
+    if creds.is_empty() {
+        return Err(ApiError::InvalidCredentials);
+    }
+
     let auth_result = webauthn
-        .finish_passkey_authentication(&credential, &auth_state)
+        .finish_discoverable_authentication(&credential, auth_state, &creds)
         .map_err(|e| {
-            tracing::error!(error = %e, "webauthn auth finish failed");
+            tracing::error!(error = %e, "webauthn discoverable auth finish failed");
             ApiError::InvalidCredentials
         })?;
 

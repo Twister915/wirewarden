@@ -52,9 +52,14 @@ export function ServerDetailPage() {
   const [copied, setCopied] = useState(false);
   const tokenRef = useRef<HTMLInputElement>(null);
 
+  const connectText = server
+    ? server.connect_command
+      ?? `wirewarden connect --api-host ${window.location.origin} --api-token ${server.api_token}`
+    : '';
+
   function handleCopy() {
-    if (!server) return;
-    navigator.clipboard.writeText(server.api_token).then(() => {
+    if (!connectText) return;
+    navigator.clipboard.writeText(connectText).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -74,10 +79,10 @@ export function ServerDetailPage() {
         <dd>{server.public_key}</dd>
         <dt>Forwards Internet</dt>
         <dd>{server.forwards_internet_traffic ? 'Yes' : 'No'}</dd>
-        <dt>API Token</dt>
+        <dt>Connect Command</dt>
         <dd>
           <div className="copy-field">
-            <input ref={tokenRef} readOnly value={server.api_token} />
+            <input ref={tokenRef} readOnly value={connectText} />
             <button type="button" onClick={handleCopy}>
               {copied ? 'Copied!' : 'Copy'}
             </button>

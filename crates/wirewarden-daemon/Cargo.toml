@@ -12,8 +12,11 @@ serde_json.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+openssl.workspace = true
 wirewarden-types = { path = "../wirewarden-types" }
-toml = "0.8"
+toml = "0.9"
+futures = "0.3"
+base64 = "0.22"
 
 [dependencies.tracing-subscriber]
 version = "0.3"
@@ -25,7 +28,15 @@ features = ["derive"]
 
 [dependencies.reqwest]
 version = "0.12"
-features = ["json"]
+default-features = false
+features = ["json", "native-tls"]
+
+[target.'cfg(target_os = "linux")'.dependencies.wireguard-uapi]
+version = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies.rtnetlink]
+version = "0.20"
 
 [dev-dependencies]
 test-case.workspace = true
+tempfile = "3"
