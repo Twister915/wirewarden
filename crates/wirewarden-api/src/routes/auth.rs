@@ -63,7 +63,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/logout", web::post().to(logout))
             .route("/me", web::get().to(me))
             .route("/forgot-password", web::post().to(forgot_password))
-            .route("/reset-password", web::post().to(reset_password)),
+            .route("/reset-password", web::post().to(reset_password))
+            .configure(super::passkey::configure),
     );
 }
 

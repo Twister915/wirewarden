@@ -7,10 +7,29 @@ mod routes;
 mod webauthn;
 
 use actix_web::{web, App, HttpResponse, HttpServer};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::db::user::UserStore;
+
+async fn seed_admin(store: &UserStore) {
+    let empty = store.is_empty().await.expect("failed to check user table");
+    if !empty {
+        return;
+    }
+
+    let password: String = uuid::Uuid::new_v4().to_string();
+
+    store
+        .create("admin", "Administrator", "admin@localhost", &password)
+        .await
+        .expect("failed to create admin user");
+
+    std::fs::write(".admin_pw.txt", &password).expect("failed to write .admin_pw.txt");
+
+    info!("created default admin user (password written to .admin_pw.txt)");
+    warn!("change the admin password and delete .admin_pw.txt");
+}
 
 fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
@@ -46,6 +65,7 @@ async fn main() -> std::io::Result<()> {
     info!("database migrations applied");
 
     let user_store = UserStore::new(pool.clone());
+    seed_admin(&user_store).await;
     let webauthn = webauthn::build_webauthn(&config);
     let challenge_store = webauthn::ChallengeStore::new();
 
@@ -66,7 +86,6 @@ async fn main() -> std::io::Result<()> {
             .wrap(tracing_actix_web::TracingLogger::default())
             .route("/health", web::get().to(health))
             .configure(routes::auth::configure)
-            .configure(routes::passkey::configure)
     })
     .bind(&bind)?
     .run()

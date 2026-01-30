@@ -27,23 +27,25 @@ pub struct PasskeyInfo {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/api/auth/passkey")
-            .route("/register/begin", web::post().to(register_begin))
-            .route("/register/finish", web::post().to(register_finish))
-            .route("/login/begin", web::post().to(login_begin))
-            .route("/login/finish", web::post().to(login_finish)),
-    )
-    .service(
-        web::resource("/api/auth/passkeys")
-            .route(web::get().to(list_passkeys)),
-    )
-    .service(
-        web::resource("/api/auth/passkeys/{id}")
-            .route(web::patch().to(rename_passkey))
-            .route(web::delete().to(delete_passkey)),
-    );
+/// Called from within the `/api/auth` scope — all paths are relative to it.
+pub fn configure(auth_scope: &mut web::ServiceConfig) {
+    auth_scope
+        .service(
+            web::scope("/passkey")
+                .route("/register/begin", web::post().to(register_begin))
+                .route("/register/finish", web::post().to(register_finish))
+                .route("/login/begin", web::post().to(login_begin))
+                .route("/login/finish", web::post().to(login_finish)),
+        )
+        .service(
+            web::resource("/passkeys")
+                .route(web::get().to(list_passkeys)),
+        )
+        .service(
+            web::resource("/passkeys/{id}")
+                .route(web::patch().to(rename_passkey))
+                .route(web::delete().to(delete_passkey)),
+        );
 }
 
 #[tracing::instrument(skip(webauthn, challenges))]

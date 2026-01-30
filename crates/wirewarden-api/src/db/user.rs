@@ -70,6 +70,15 @@ impl UserStore {
         Self { pool }
     }
 
+    #[tracing::instrument(skip(self))]
+    pub async fn is_empty(&self) -> Result<bool> {
+        let row: (bool,) =
+            sqlx::query_as("SELECT NOT EXISTS (SELECT 1 FROM users)")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(row.0)
+    }
+
     #[tracing::instrument(skip(self, password))]
     pub async fn create(
         &self,

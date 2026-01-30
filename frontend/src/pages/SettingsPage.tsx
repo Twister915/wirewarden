@@ -25,11 +25,12 @@ export function SettingsPage() {
   async function handleAdd() {
     setError('');
     try {
-      const opts = await passkeyApi.registerBegin();
-      const credential = await startRegistration({ optionsJSON: opts });
+      const resp = await passkeyApi.registerBegin();
+      const credential = await startRegistration({ optionsJSON: resp.publicKey });
       await passkeyApi.registerFinish(credential);
       await load();
     } catch (err) {
+      if (err instanceof Error && err.name === 'NotAllowedError') return;
       setError(err instanceof ApiError ? err.message : 'Failed to add passkey');
     }
   }

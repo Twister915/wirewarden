@@ -18,9 +18,12 @@ tracing-actix-web = "0.7"
 argon2 = "0.5"
 dotenvy.workspace = true
 sqlx.workspace = true
-jsonwebtoken = "10"
 webauthn-rs.workspace = true
 dashmap.workspace = true
+
+[dependencies.jsonwebtoken]
+version = "10"
+features = ["rust_crypto"]
 
 [dependencies.tracing-subscriber]
 version = "0.3"
