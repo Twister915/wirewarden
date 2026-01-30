@@ -124,6 +124,9 @@ pub enum VpnStoreError {
     #[error("server not found")]
     ServerNotFound,
 
+    #[error("no available address offsets in this network")]
+    NetworkFull,
+
     #[error("key encryption/decryption failed")]
     KeyEncryption,
 }
@@ -242,6 +245,22 @@ impl VpnStore {
     }
 
     #[tracing::instrument(skip(self))]
+    pub async fn update_network_dns(
+        &self,
+        id: Uuid,
+        dns_servers: &[String],
+    ) -> Result<Option<Network>> {
+        sqlx::query_as::<_, Network>(
+            "UPDATE networks SET dns_servers = $2, updated_at = now() WHERE id = $1 RETURNING *",
+        )
+        .bind(id)
+        .bind(dns_servers)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    #[tracing::instrument(skip(self))]
     pub async fn delete_network(&self, id: Uuid) -> Result<()> {
         sqlx::query("DELETE FROM networks WHERE id = $1")
             .bind(id)
@@ -310,38 +329,39 @@ impl VpnStore {
         Ok(())
     }
 
-    // -- Offset validation ---------------------------------------------------
+    // -- Offset allocation ---------------------------------------------------
 
-    async fn validate_offset(&self, network_id: Uuid, offset: i32) -> Result<()> {
+    async fn next_offset(&self, network_id: Uuid) -> Result<i32> {
         let network = self
             .get_network(network_id)
             .await?
             .ok_or(VpnStoreError::NetworkNotFound)?;
 
         let max = (1i64 << (32 - network.cidr_prefix)) - 1;
-        if offset <= 0 || offset as i64 >= max {
-            return Err(VpnStoreError::OffsetOutOfRange {
-                offset,
-                max: max as i32,
-            });
-        }
 
-        let conflict: Option<(i32,)> = sqlx::query_as(
-            "SELECT address_offset FROM wg_servers WHERE network_id = $1 AND address_offset = $2
-             UNION ALL
-             SELECT address_offset FROM wg_clients WHERE network_id = $1 AND address_offset = $2
-             LIMIT 1",
+        let used: Vec<(i32,)> = sqlx::query_as(
+            "SELECT address_offset FROM wg_servers WHERE network_id = $1
+             UNION
+             SELECT address_offset FROM wg_clients WHERE network_id = $1
+             ORDER BY address_offset",
         )
         .bind(network_id)
-        .bind(offset)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
 
-        if conflict.is_some() {
-            return Err(VpnStoreError::AddressOffsetConflict { offset });
+        let mut candidate = 1i32;
+        for (offset,) in &used {
+            if *offset != candidate {
+                break;
+            }
+            candidate += 1;
         }
 
-        Ok(())
+        if candidate as i64 >= max {
+            return Err(VpnStoreError::NetworkFull);
+        }
+
+        Ok(candidate)
     }
 
     // -- WgServer CRUD -------------------------------------------------------
@@ -352,12 +372,11 @@ impl VpnStore {
         network_id: Uuid,
         name: &str,
         key_id: Uuid,
-        address_offset: i32,
         forwards_internet_traffic: bool,
         endpoint_host: Option<&str>,
         endpoint_port: i32,
     ) -> Result<WgServer> {
-        self.validate_offset(network_id, address_offset).await?;
+        let address_offset = self.next_offset(network_id).await?;
 
         let api_token = Uuid::new_v4().to_string();
 
@@ -436,9 +455,8 @@ impl VpnStore {
         network_id: Uuid,
         name: &str,
         key_id: Uuid,
-        address_offset: i32,
     ) -> Result<WgClient> {
-        self.validate_offset(network_id, address_offset).await?;
+        let address_offset = self.next_offset(network_id).await?;
 
         sqlx::query_as::<_, WgClient>(
             "INSERT INTO wg_clients (network_id, name, key_id, address_offset)
@@ -656,11 +674,13 @@ impl WgClient {
         let prefix = snapshot.network.cidr_prefix;
 
         let mut config = String::new();
+        writeln!(config, "# {}", self.name).unwrap();
         writeln!(config, "[Interface]").unwrap();
+        writeln!(config, "# PublicKey = {}", key.public_key).unwrap();
         writeln!(config, "PrivateKey = {}", key.private_key).unwrap();
         writeln!(config, "Address = {client_ip}/{prefix}").unwrap();
 
-        if !snapshot.network.dns_servers.is_empty() {
+        if forward_internet && !snapshot.network.dns_servers.is_empty() {
             writeln!(config, "DNS = {}", snapshot.network.dns_servers.join(", ")).unwrap();
         }
 
@@ -722,6 +742,7 @@ impl WgClient {
             let allowed_ips: Vec<String> = allowed.iter().map(|a| a.to_string()).collect();
 
             writeln!(config).unwrap();
+            writeln!(config, "# {}", server.name).unwrap();
             writeln!(config, "[Peer]").unwrap();
             let server_key = &snapshot.keys[&server.key_id];
             writeln!(config, "PublicKey = {}", server_key.public_key).unwrap();
@@ -896,7 +917,7 @@ mod tests {
 
         assert!(config.contains("PrivateKey = client-priv"));
         assert!(config.contains("Address = 10.0.1.2/24"));
-        assert!(config.contains("DNS = 1.1.1.1, 8.8.8.8"));
+        assert!(!config.contains("DNS ="));
         assert!(config.contains("PublicKey = server-pub"));
         assert!(config.contains("Endpoint = vpn.example.com:51820"));
         assert!(config.contains("AllowedIPs = 10.0.1.0/24"));
@@ -1106,7 +1127,20 @@ mod tests {
     }
 
     #[test]
-    fn test_dns_included() {
+    fn test_dns_included_when_forwarding() {
+        let network = make_network("10.0.1.0/24", &["1.1.1.1", "8.8.8.8"]);
+        let ck = Uuid::new_v4();
+        let ckey = make_key(ck, "client-priv", "client-pub");
+        let client = make_client(Uuid::new_v4(), ck, 2);
+
+        let snapshot = make_snapshot(network, vec![], vec![], HashMap::new());
+        let config = client.wg_quick_config(&ckey, &snapshot, true);
+
+        assert!(config.contains("DNS = 1.1.1.1, 8.8.8.8"));
+    }
+
+    #[test]
+    fn test_dns_excluded_without_forwarding() {
         let network = make_network("10.0.1.0/24", &["1.1.1.1", "8.8.8.8"]);
         let ck = Uuid::new_v4();
         let ckey = make_key(ck, "client-priv", "client-pub");
@@ -1115,7 +1149,7 @@ mod tests {
         let snapshot = make_snapshot(network, vec![], vec![], HashMap::new());
         let config = client.wg_quick_config(&ckey, &snapshot, false);
 
-        assert!(config.contains("DNS = 1.1.1.1, 8.8.8.8"));
+        assert!(!config.contains("DNS ="));
     }
 
     #[test]

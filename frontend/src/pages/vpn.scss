@@ -1,0 +1,267 @@
+.vpn-page {
+  h1 {
+    margin-bottom: 1.5rem;
+  }
+
+  h2 {
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+
+    th, td {
+      text-align: left;
+      padding: 0.5rem;
+      border-bottom: 1px solid #333;
+    }
+
+    th {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: #aaa;
+    }
+
+    a {
+      color: #6af;
+    }
+  }
+
+  .form-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: end;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      font-size: 0.85rem;
+    }
+
+    input {
+      padding: 0.35rem 0.5rem;
+      border: 1px solid #444;
+      border-radius: 4px;
+      background: #1a1a1a;
+      color: inherit;
+    }
+
+    .checkbox-label {
+      flex-direction: row;
+      align-items: center;
+      gap: 0.5rem;
+    }
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .info {
+    margin-bottom: 1rem;
+
+    dt {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: #aaa;
+    }
+
+    dd {
+      margin: 0 0 0.5rem;
+    }
+  }
+
+  .copy-field {
+    display: inline-flex;
+    max-width: 100%;
+
+    input {
+      flex: 1;
+      min-width: 0;
+      padding: 0.4rem 0.6rem;
+      font-family: monospace;
+      font-size: 0.85rem;
+      background: #111;
+      color: #ccc;
+      border: 1px solid #333;
+      border-right: none;
+      border-radius: 4px 0 0 4px;
+      outline: none;
+      cursor: default;
+    }
+
+    button {
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
+      border: 1px solid #333;
+      border-radius: 0 4px 4px 0;
+      background: #252525;
+      color: #ccc;
+      cursor: pointer;
+      white-space: nowrap;
+
+      &:hover {
+        background: #333;
+      }
+    }
+  }
+
+  .config-preview {
+    background: #111;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 1rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    white-space: pre;
+    margin-bottom: 1rem;
+  }
+
+  .dns-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+
+    .dns-list-entry {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+
+      .dns-list-ip {
+        font-family: monospace;
+        font-size: 0.9rem;
+      }
+
+      button {
+        padding: 0 0.4rem;
+        font-size: 0.75rem;
+        line-height: 1.4;
+        border: 1px solid #444;
+        border-radius: 3px;
+        background: #252525;
+        color: #ccc;
+        cursor: pointer;
+
+        &:hover {
+          background: #400;
+          border-color: #a00;
+        }
+      }
+    }
+
+    .dns-list-input {
+      display: flex;
+      gap: 0.35rem;
+      margin-top: 0.25rem;
+
+      input {
+        padding: 0.3rem 0.5rem;
+        border: 1px solid #444;
+        border-radius: 4px;
+        background: #1a1a1a;
+        color: inherit;
+        font-family: monospace;
+        width: 10rem;
+      }
+
+      button {
+        padding: 0.3rem 0.6rem;
+        font-size: 0.8rem;
+      }
+    }
+
+    .dns-list-error {
+      color: #f44;
+      font-size: 0.8rem;
+    }
+  }
+
+  .error {
+    color: #f44;
+    font-size: 0.875rem;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .vpn-page {
+    table {
+      th, td {
+        border-color: #ddd;
+      }
+
+      th {
+        color: #666;
+      }
+
+      a {
+        color: #07c;
+      }
+    }
+
+    .form-row input {
+      background: #fff;
+      border-color: #ccc;
+    }
+
+    .info dt {
+      color: #666;
+    }
+
+    .copy-field {
+      input {
+        background: #f5f5f5;
+        color: #333;
+        border-color: #ccc;
+      }
+
+      button {
+        background: #e8e8e8;
+        border-color: #ccc;
+        color: #333;
+
+        &:hover {
+          background: #ddd;
+        }
+      }
+    }
+
+    .config-preview {
+      background: #f8f8f8;
+      border-color: #ddd;
+    }
+
+    .dns-list {
+      .dns-list-entry button {
+        background: #e8e8e8;
+        border-color: #ccc;
+        color: #333;
+
+        &:hover {
+          background: #fdd;
+          border-color: #c00;
+        }
+      }
+
+      .dns-list-input input {
+        background: #fff;
+        border-color: #ccc;
+      }
+
+      .dns-list-error {
+        color: #c00;
+      }
+    }
+
+    .error {
+      color: #c00;
+    }
+  }
+}

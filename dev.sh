@@ -8,6 +8,13 @@ if [ -f .env ]; then
     set -a; source .env; set +a
 fi
 
+if [ -z "${WG_KEY_SECRET:-}" ]; then
+    WG_KEY_SECRET="$(openssl rand -hex 32)"
+    echo "WG_KEY_SECRET=\"$WG_KEY_SECRET\"" >> .env
+    export WG_KEY_SECRET
+    echo "Generated WG_KEY_SECRET and saved to .env"
+fi
+
 usage() {
     cat <<EOF
 Usage: ./dev.sh <command>

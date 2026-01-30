@@ -11,7 +11,6 @@ use crate::extract::AuthUser;
 struct CreateServerRequest {
     network_id: Uuid,
     name: String,
-    address_offset: i32,
     forwards_internet_traffic: bool,
     endpoint_host: Option<String>,
     endpoint_port: i32,
@@ -79,7 +78,6 @@ async fn create_server(
             body.network_id,
             &body.name,
             key.id,
-            body.address_offset,
             body.forwards_internet_traffic,
             body.endpoint_host.as_deref(),
             body.endpoint_port,
@@ -97,7 +95,7 @@ async fn get_server(
 ) -> Result<HttpResponse, ApiError> {
     let id = path.into_inner();
     let server = store.get_server(id).await?.ok_or(ApiError::NotFound)?;
-    let resp = build_response(&store, server, false).await?;
+    let resp = build_response(&store, server, true).await?;
     Ok(HttpResponse::Ok().json(resp))
 }
 
@@ -121,7 +119,7 @@ fn redact_token(token: &str) -> String {
     }
 }
 
-async fn list_servers(
+pub async fn list_servers(
     _auth: AuthUser,
     store: web::Data<VpnStore>,
     path: web::Path<Uuid>,
@@ -167,8 +165,5 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(web::get().to(get_server))
             .route(web::delete().to(delete_server)),
     )
-    .service(
-        web::resource("/api/networks/{id}/servers")
-            .route(web::get().to(list_servers)),
-    );
+    ;
 }

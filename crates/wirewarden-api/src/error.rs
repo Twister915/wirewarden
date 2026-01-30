@@ -42,6 +42,9 @@ pub enum ApiError {
     #[error("offset out of range")]
     OffsetOutOfRange,
 
+    #[error("no available addresses in this network")]
+    NetworkFull,
+
     #[error("internal server error")]
     Internal,
 }
@@ -54,7 +57,7 @@ impl ResponseError for ApiError {
             Self::DuplicateUsername | Self::DuplicateEmail | Self::DuplicateName
             | Self::OffsetConflict => StatusCode::CONFLICT,
             Self::InvalidResetToken | Self::ResetTokenExpired | Self::Validation(_)
-            | Self::OffsetOutOfRange => StatusCode::BAD_REQUEST,
+            | Self::OffsetOutOfRange | Self::NetworkFull => StatusCode::BAD_REQUEST,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -87,6 +90,7 @@ impl From<VpnStoreError> for ApiError {
             }
             VpnStoreError::AddressOffsetConflict { .. } => Self::OffsetConflict,
             VpnStoreError::OffsetOutOfRange { .. } => Self::OffsetOutOfRange,
+            VpnStoreError::NetworkFull => Self::NetworkFull,
             VpnStoreError::NetworkNotFound
             | VpnStoreError::KeyNotFound
             | VpnStoreError::ServerNotFound => Self::NotFound,

@@ -18,6 +18,8 @@ export function DashboardPage() {
         </dl>
       )}
       <nav>
+        <Link to="/networks">Networks</Link>
+        {' | '}
         <Link to="/settings">Settings</Link>
       </nav>
       <button type="button" onClick={logout}>

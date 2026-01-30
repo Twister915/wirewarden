@@ -11,7 +11,6 @@ use crate::extract::AuthUser;
 struct CreateClientRequest {
     network_id: Uuid,
     name: String,
-    address_offset: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,7 +56,7 @@ async fn create_client(
     let key = store.create_key().await?;
 
     let client = store
-        .create_client(body.network_id, &body.name, key.id, body.address_offset)
+        .create_client(body.network_id, &body.name, key.id)
         .await?;
 
     let resp = build_response(&store, client).await?;
@@ -87,7 +86,7 @@ async fn delete_client(
     Ok(HttpResponse::NoContent().finish())
 }
 
-async fn list_clients(
+pub async fn list_clients(
     _auth: AuthUser,
     store: web::Data<VpnStore>,
     path: web::Path<Uuid>,
@@ -165,8 +164,5 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         web::resource("/api/clients/{id}/config")
             .route(web::get().to(client_config)),
     )
-    .service(
-        web::resource("/api/networks/{id}/clients")
-            .route(web::get().to(list_clients)),
-    );
+    ;
 }

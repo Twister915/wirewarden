@@ -7,6 +7,10 @@ import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { NetworksPage } from './pages/NetworksPage';
+import { NetworkDetailPage } from './pages/NetworkDetailPage';
+import { ServerDetailPage } from './pages/ServerDetailPage';
+import { ClientDetailPage } from './pages/ClientDetailPage';
 
 function ProtectedRoute() {
   const { user, loading } = useAuth();
@@ -31,6 +35,10 @@ export const router = createBrowserRouter([
         children: [
           { path: '/', element: <DashboardPage /> },
           { path: '/settings', element: <SettingsPage /> },
+          { path: '/networks', element: <NetworksPage /> },
+          { path: '/networks/:id', element: <NetworkDetailPage /> },
+          { path: '/servers/:id', element: <ServerDetailPage /> },
+          { path: '/clients/:id', element: <ClientDetailPage /> },
         ],
       },
       {
