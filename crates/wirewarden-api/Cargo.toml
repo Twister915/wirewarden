@@ -1,0 +1,30 @@
+[package]
+name = "wirewarden-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+wirewarden-types = { path = "../wirewarden-types" }
+actix-web = "4"
+tracing-actix-web = "0.7"
+argon2 = "0.5"
+jsonwebtoken = "10"
+
+[dependencies.tracing-subscriber]
+version = "0.3"
+features = ["env-filter", "json"]
+
+[dependencies.diesel]
+version = "2"
+features = ["postgres", "uuid", "chrono", "serde_json", "r2d2"]
+
+[dev-dependencies]
+test-case.workspace = true

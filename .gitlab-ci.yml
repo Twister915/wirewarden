@@ -1,0 +1,46 @@
+stages:
+  - validate
+
+variables:
+  CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
+
+cache:
+  key:
+    files:
+      - Cargo.lock
+  paths:
+    - .cargo/
+    - target/
+
+lint:
+  stage: validate
+  image: rustlang/rust:nightly-slim
+  script:
+    - rustup component add rustfmt clippy
+    - cargo fmt --all --check
+    - cargo clippy --all-targets --all-features -- -D warnings -A dead_code -A unused
+
+test:
+  stage: validate
+  image: rustlang/rust:nightly-slim
+  script:
+    - cargo test --all-features
+
+coverage:
+  stage: validate
+  image: rustlang/rust:nightly-slim
+  script:
+    - cargo install cargo-tarpaulin
+    - cargo tarpaulin --out Xml
+  coverage: '/^\d+.\d+% coverage/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: cobertura.xml
+
+build:debug:
+  stage: validate
+  image: rustlang/rust:nightly-slim
+  script:
+    - cargo build --all-features
