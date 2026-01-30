@@ -131,6 +131,21 @@ pub enum VpnStoreError {
 type Result<T> = std::result::Result<T, VpnStoreError>;
 
 // ---------------------------------------------------------------------------
+// Batch lookup helper
+// ---------------------------------------------------------------------------
+
+macro_rules! batch_by_ids {
+    ($pool:expr, $table:expr, $ty:ty, $ids:expr) => {
+        sqlx::query_as::<_, $ty>(
+            concat!("SELECT * FROM ", $table, " WHERE id = ANY($1)"),
+        )
+        .bind($ids)
+        .fetch_all($pool)
+        .await
+    };
+}
+
+// ---------------------------------------------------------------------------
 // VpnStore
 // ---------------------------------------------------------------------------
 
@@ -269,6 +284,21 @@ impl VpnStore {
             .ok_or(VpnStoreError::KeyNotFound)?;
 
         self.decrypt_key_row(row)
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn get_keys_batch(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, WgKey>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows: Vec<WgKeyRow> = batch_by_ids!(&self.pool, "wg_keys", WgKeyRow, ids)?;
+        let mut map = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let id = row.id;
+            let key = self.decrypt_key_row(row)?;
+            map.insert(id, key);
+        }
+        Ok(map)
     }
 
     #[tracing::instrument(skip(self))]
@@ -603,7 +633,7 @@ fn rfc1918_networks() -> Vec<Ipv4Network> {
 }
 
 /// Compute the IP address for a given network + offset.
-fn compute_address(network: &Network, offset: i32) -> Ipv4Addr {
+pub fn compute_address(network: &Network, offset: i32) -> Ipv4Addr {
     let base = match network.cidr_ip {
         IpNetwork::V4(v4) => ip_to_u32(v4.ip()),
         IpNetwork::V6(_) => panic!("IPv6 not supported"),

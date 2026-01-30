@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::db::user::UserStore;
+use crate::db::vpn::VpnStore;
 
 async fn seed_admin(store: &UserStore) {
     let empty = store.is_empty().await.expect("failed to check user table");
@@ -68,6 +69,7 @@ async fn main() -> std::io::Result<()> {
     seed_admin(&user_store).await;
     let webauthn = webauthn::build_webauthn(&config);
     let challenge_store = webauthn::ChallengeStore::new();
+    let vpn_store = VpnStore::new(pool.clone(), config.wg_key_secret);
 
     let bind = config.bind_addr.clone();
 
@@ -75,6 +77,7 @@ async fn main() -> std::io::Result<()> {
     let store_data = web::Data::new(user_store);
     let webauthn_data = web::Data::new(webauthn);
     let challenge_data = web::Data::new(challenge_store);
+    let vpn_data = web::Data::new(vpn_store);
 
     HttpServer::new(move || {
         App::new()
@@ -83,9 +86,15 @@ async fn main() -> std::io::Result<()> {
             .app_data(store_data.clone())
             .app_data(webauthn_data.clone())
             .app_data(challenge_data.clone())
+            .app_data(vpn_data.clone())
             .wrap(tracing_actix_web::TracingLogger::default())
             .route("/health", web::get().to(health))
             .configure(routes::auth::configure)
+            .configure(routes::networks::configure)
+            .configure(routes::servers::configure)
+            .configure(routes::clients::configure)
+            .configure(routes::server_routes::configure)
+            .configure(routes::daemon::configure)
     })
     .bind(&bind)?
     .run()
