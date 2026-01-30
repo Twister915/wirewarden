@@ -314,7 +314,7 @@ pub mod linux {
         let updated: Vec<&DaemonPeer> = next_peers
             .iter()
             .filter(|(k, p)| {
-                prev_peers.get(*k).is_some_and(|old| old != p)
+                prev_peers.get(*k).is_some_and(|old| old != *p)
             })
             .map(|(_, p)| *p)
             .collect();
