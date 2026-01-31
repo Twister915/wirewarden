@@ -14,14 +14,13 @@
 
 use sqlx::PgPool;
 use uuid::Uuid;
-use webauthn_rs::prelude::*;
 use webauthn_rs::WebauthnBuilder;
+use webauthn_rs::prelude::*;
 
 use crate::config::Config;
 
 pub fn build_webauthn(config: &Config) -> Webauthn {
-    let rp_origin =
-        Url::parse(&config.webauthn_rp_origin).expect("invalid WEBAUTHN_RP_ORIGIN URL");
+    let rp_origin = Url::parse(&config.webauthn_rp_origin).expect("invalid WEBAUTHN_RP_ORIGIN URL");
 
     WebauthnBuilder::new(&config.webauthn_rp_id, &rp_origin)
         .expect("failed to build Webauthn")

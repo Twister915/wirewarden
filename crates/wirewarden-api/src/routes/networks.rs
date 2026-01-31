@@ -63,7 +63,7 @@ struct NetworkResponse {
 
 impl NetworkResponse {
     fn from_model(n: crate::db::vpn::Network) -> Self {
-        let cidr = format!("{}/{}", n.cidr_ip, n.cidr_prefix);
+        let cidr = n.cidr_ip.to_string();
         Self {
             id: n.id,
             name: n.name,
@@ -110,9 +110,8 @@ async fn create_network(
 
     validate_dns_servers(&body.dns_servers)?;
 
-    let prefix = cidr.prefix() as i32;
     let network = store
-        .create_network(&body.name, cidr, prefix, None, &body.dns_servers, body.persistent_keepalive)
+        .create_network(&body.name, cidr, None, &body.dns_servers, body.persistent_keepalive)
         .await?;
 
     Ok(HttpResponse::Created().json(NetworkResponse::from_model(network)))

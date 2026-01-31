@@ -12,17 +12,17 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use webauthn_rs::prelude::*;
 use webauthn_rs::Webauthn;
+use webauthn_rs::prelude::*;
 
 use crate::config::Config;
 use crate::db::user::UserStore;
+use crate::db::webauthn::ChallengeStore;
 use crate::error::ApiError;
 use crate::extract::AuthUser;
-use crate::webauthn::ChallengeStore;
 
 #[derive(Debug, Deserialize)]
 pub struct RenameRequest {
@@ -46,10 +46,7 @@ pub fn configure(auth_scope: &mut web::ServiceConfig) {
                 .route("/login/begin", web::post().to(login_begin))
                 .route("/login/finish", web::post().to(login_finish)),
         )
-        .service(
-            web::resource("/passkeys")
-                .route(web::get().to(list_passkeys)),
-        )
+        .service(web::resource("/passkeys").route(web::get().to(list_passkeys)))
         .service(
             web::resource("/passkeys/{id}")
                 .route(web::patch().to(rename_passkey))
@@ -76,7 +73,12 @@ async fn register_begin(
         .ok_or(ApiError::UserNotFound)?;
 
     let (ccr, reg_state) = webauthn
-        .start_passkey_registration(auth.user_id, &user.username, &user.display_name, Some(exclude))
+        .start_passkey_registration(
+            auth.user_id,
+            &user.username,
+            &user.display_name,
+            Some(exclude),
+        )
         .map_err(|e| {
             tracing::error!(error = %e, "webauthn registration start failed");
             ApiError::Internal
@@ -88,10 +90,13 @@ async fn register_begin(
     })?;
 
     let session_id = Uuid::new_v4();
-    challenges.insert(session_id, state_json).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to store registration challenge");
-        ApiError::Internal
-    })?;
+    challenges
+        .insert(session_id, state_json)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to store registration challenge");
+            ApiError::Internal
+        })?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "publicKey": ccr.public_key,
@@ -120,7 +125,9 @@ async fn register_finish(
             tracing::error!(error = %e, "failed to fetch registration challenge");
             ApiError::Internal
         })?
-        .ok_or(ApiError::Validation("no pending registration challenge".into()))?;
+        .ok_or(ApiError::Validation(
+            "no pending registration challenge".into(),
+        ))?;
 
     let reg_state: PasskeyRegistration = serde_json::from_value(state_json).map_err(|e| {
         tracing::error!(error = %e, "failed to deserialize reg state");
@@ -141,15 +148,7 @@ async fn register_finish(
     })?;
 
     store
-        .add_passkey(
-            auth.user_id,
-            "Passkey",
-            cred_id,
-            &pk_bytes,
-            0,
-            None,
-            None,
-        )
+        .add_passkey(auth.user_id, "Passkey", cred_id, &pk_bytes, 0, None, None)
         .await?;
 
     tracing::info!(user_id = %auth.user_id, "passkey registered");
@@ -162,12 +161,10 @@ async fn login_begin(
     webauthn: web::Data<Webauthn>,
     challenges: web::Data<ChallengeStore>,
 ) -> Result<HttpResponse, ApiError> {
-    let (rcr, auth_state) = webauthn
-        .start_discoverable_authentication()
-        .map_err(|e| {
-            tracing::error!(error = %e, "webauthn discoverable auth start failed");
-            ApiError::Internal
-        })?;
+    let (rcr, auth_state) = webauthn.start_discoverable_authentication().map_err(|e| {
+        tracing::error!(error = %e, "webauthn discoverable auth start failed");
+        ApiError::Internal
+    })?;
 
     let state_json = serde_json::to_value(&auth_state).map_err(|e| {
         tracing::error!(error = %e, "failed to serialize auth state");
@@ -175,10 +172,13 @@ async fn login_begin(
     })?;
 
     let session_id = Uuid::new_v4();
-    challenges.insert(session_id, state_json).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to store auth challenge");
-        ApiError::Internal
-    })?;
+    challenges
+        .insert(session_id, state_json)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to store auth challenge");
+            ApiError::Internal
+        })?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "publicKey": rcr.public_key,
@@ -200,13 +200,13 @@ async fn login_finish(
         .and_then(|s| s.parse().ok())
         .ok_or(ApiError::Validation("missing session_id".into()))?;
 
-    let credential: PublicKeyCredential =
-        serde_json::from_value(body.get("credential").cloned().unwrap_or_default()).map_err(
-            |e| {
-                tracing::error!(error = %e, "failed to parse credential");
-                ApiError::Validation("invalid credential".into())
-            },
-        )?;
+    let credential: PublicKeyCredential = serde_json::from_value(
+        body.get("credential").cloned().unwrap_or_default(),
+    )
+    .map_err(|e| {
+        tracing::error!(error = %e, "failed to parse credential");
+        ApiError::Validation("invalid credential".into())
+    })?;
 
     // The userHandle in the credential response contains the user UUID that was
     // set during passkey registration. Extract it to look up the user's keys.

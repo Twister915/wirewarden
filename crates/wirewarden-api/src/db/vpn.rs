@@ -35,12 +35,17 @@ pub struct Network {
     pub id: Uuid,
     pub name: String,
     pub cidr_ip: IpNetwork,
-    pub cidr_prefix: i32,
     pub owner_id: Option<Uuid>,
     pub dns_servers: Vec<String>,
     pub persistent_keepalive: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl Network {
+    pub fn prefix(&self) -> u8 {
+        self.cidr_ip.prefix()
+    }
 }
 
 #[derive(Debug)]
@@ -218,19 +223,17 @@ impl VpnStore {
         &self,
         name: &str,
         cidr_ip: IpNetwork,
-        cidr_prefix: i32,
         owner_id: Option<Uuid>,
         dns_servers: &[String],
         persistent_keepalive: i32,
     ) -> Result<Network> {
         sqlx::query_as::<_, Network>(
-            "INSERT INTO networks (name, cidr_ip, cidr_prefix, owner_id, dns_servers, persistent_keepalive)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            "INSERT INTO networks (name, cidr_ip, owner_id, dns_servers, persistent_keepalive)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING *",
         )
         .bind(name)
         .bind(cidr_ip)
-        .bind(cidr_prefix)
         .bind(owner_id)
         .bind(dns_servers)
         .bind(persistent_keepalive)
@@ -357,7 +360,7 @@ impl VpnStore {
             .await?
             .ok_or(VpnStoreError::NetworkNotFound)?;
 
-        let max = (1i64 << (32 - network.cidr_prefix)) - 1;
+        let max = (1i64 << (32 - network.prefix())) - 1;
 
         let used: Vec<(i32,)> = sqlx::query_as(
             "SELECT address_offset FROM wg_servers WHERE network_id = $1
@@ -691,7 +694,7 @@ impl WgClient {
         forward_internet: bool,
     ) -> String {
         let client_ip = compute_address(&snapshot.network, self.address_offset);
-        let prefix = snapshot.network.cidr_prefix;
+        let prefix = snapshot.network.prefix();
 
         let mut config = String::new();
         writeln!(config, "# {}", self.name).unwrap();
@@ -706,7 +709,7 @@ impl WgClient {
 
         let vpn_cidr: Ipv4Network = match snapshot.network.cidr_ip {
             IpNetwork::V4(v4) => {
-                Ipv4Network::new(v4.ip(), snapshot.network.cidr_prefix as u8).unwrap()
+                Ipv4Network::new(v4.ip(), snapshot.network.prefix()).unwrap()
             }
             IpNetwork::V6(_) => panic!("IPv6 not supported"),
         };
@@ -843,7 +846,6 @@ mod tests {
             id: Uuid::nil(),
             name: "test-net".to_string(),
             cidr_ip: IpNetwork::V4(Ipv4Network::new(v4.ip(), v4.prefix()).unwrap()),
-            cidr_prefix: v4.prefix() as i32,
             owner_id: None,
             dns_servers: dns.iter().map(|s| s.to_string()).collect(),
             persistent_keepalive: 25,

@@ -12,6 +12,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+use std::collections::HashMap;
 use std::net::IpAddr;
 
 use thiserror::Error;
@@ -41,6 +42,9 @@ pub enum PlatformError {
     Io(#[from] std::io::Error),
 }
 
+/// Interface name prefix for wirewarden-managed WireGuard interfaces.
+pub const IFACE_PREFIX: &str = "wwg";
+
 pub trait Platform {
     fn ensure_interface(name: &str) -> impl Future<Output = Result<(), PlatformError>> + Send;
     fn remove_interface(name: &str) -> impl Future<Output = Result<(), PlatformError>> + Send;
@@ -50,6 +54,12 @@ pub trait Platform {
         prev: Option<&DaemonConfig>,
     ) -> impl Future<Output = Result<(), PlatformError>> + Send;
     fn interface_exists(name: &str) -> impl Future<Output = Result<bool, PlatformError>> + Send;
+
+    /// List all wirewarden-managed interfaces (`wwg*`) and their private keys.
+    ///
+    /// Returns a map of interface name to base64-encoded private key.
+    fn list_managed_interfaces()
+    -> impl Future<Output = Result<HashMap<String, String>, PlatformError>> + Send;
 }
 
 use std::future::Future;
@@ -106,6 +116,10 @@ impl Platform for StubPlatform {
     async fn interface_exists(_name: &str) -> Result<bool, PlatformError> {
         Err(PlatformError::Unsupported)
     }
+
+    async fn list_managed_interfaces() -> Result<HashMap<String, String>, PlatformError> {
+        Err(PlatformError::Unsupported)
+    }
 }
 
 // -- Linux implementation --
@@ -117,7 +131,7 @@ pub mod linux {
 
     use futures::TryStreamExt;
     use tracing::{debug, info};
-    use wireguard_uapi::{RouteSocket, WgSocket, set};
+    use wireguard_uapi::{DeviceInterface, RouteSocket, WgSocket, set};
 
     use wirewarden_types::daemon::{DaemonConfig, DaemonPeer};
 
@@ -127,9 +141,10 @@ pub mod linux {
 
     impl Platform for LinuxPlatform {
         async fn ensure_interface(name: &str) -> Result<(), PlatformError> {
-            let mut route = RouteSocket::connect()
-                .map_err(|e| PlatformError::Interface(e.to_string()))?;
-            let existing = route.list_device_names()
+            let mut route =
+                RouteSocket::connect().map_err(|e| PlatformError::Interface(e.to_string()))?;
+            let existing = route
+                .list_device_names()
                 .map_err(|e| PlatformError::Interface(e.to_string()))?;
 
             if existing.iter().any(|n| n == name) {
@@ -138,20 +153,23 @@ pub mod linux {
             }
 
             info!(interface = name, "creating wireguard interface");
-            route.add_device(name)
+            route
+                .add_device(name)
                 .map_err(|e| PlatformError::Interface(e.to_string()))?;
             Ok(())
         }
 
         async fn remove_interface(name: &str) -> Result<(), PlatformError> {
-            let mut route = RouteSocket::connect()
-                .map_err(|e| PlatformError::Interface(e.to_string()))?;
-            let existing = route.list_device_names()
+            let mut route =
+                RouteSocket::connect().map_err(|e| PlatformError::Interface(e.to_string()))?;
+            let existing = route
+                .list_device_names()
                 .map_err(|e| PlatformError::Interface(e.to_string()))?;
 
             if existing.iter().any(|n| n == name) {
                 info!(interface = name, "removing interface");
-                route.del_device(name)
+                route
+                    .del_device(name)
                     .map_err(|e| PlatformError::Interface(e.to_string()))?;
             }
             Ok(())
@@ -197,11 +215,47 @@ pub mod linux {
         }
 
         async fn interface_exists(name: &str) -> Result<bool, PlatformError> {
-            let mut route = RouteSocket::connect()
-                .map_err(|e| PlatformError::Interface(e.to_string()))?;
-            let existing = route.list_device_names()
+            let mut route =
+                RouteSocket::connect().map_err(|e| PlatformError::Interface(e.to_string()))?;
+            let existing = route
+                .list_device_names()
                 .map_err(|e| PlatformError::Interface(e.to_string()))?;
             Ok(existing.iter().any(|n| n == name))
+        }
+
+        async fn list_managed_interfaces() -> Result<HashMap<String, String>, PlatformError> {
+            use base64::Engine;
+
+            let mut route =
+                RouteSocket::connect().map_err(|e| PlatformError::Interface(e.to_string()))?;
+            let all_names = route
+                .list_device_names()
+                .map_err(|e| PlatformError::Interface(e.to_string()))?;
+
+            let managed: Vec<&str> = all_names
+                .iter()
+                .filter(|n| n.starts_with(super::IFACE_PREFIX))
+                .map(|n| n.as_str())
+                .collect();
+
+            let mut result = HashMap::with_capacity(managed.len());
+
+            let mut wg =
+                WgSocket::connect().map_err(|e| PlatformError::Interface(e.to_string()))?;
+
+            for name in managed {
+                let device = wg
+                    .get_device(DeviceInterface::from_name(name))
+                    .map_err(|e| PlatformError::Interface(e.to_string()))?;
+
+                if let Some(key) = device.private_key {
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(key);
+                    debug!(interface = name, "discovered managed interface");
+                    result.insert(name.to_owned(), encoded);
+                }
+            }
+
+            Ok(result)
         }
     }
 
@@ -214,17 +268,20 @@ pub mod linux {
             .iter()
             .map(|p| {
                 let pub_key = decode_key(&p.public_key)?;
-                let endpoint: Option<SocketAddr> = p
-                    .endpoint
-                    .as_deref()
-                    .and_then(|ep| ep.parse().ok());
+                let endpoint: Option<SocketAddr> =
+                    p.endpoint.as_deref().and_then(|ep| ep.parse().ok());
                 let allowed_ips: Vec<(IpAddr, u8)> = p
                     .allowed_ips
                     .iter()
                     .map(|ip| parse_cidr(ip))
                     .collect::<Result<_, _>>()?;
                 let persistent_keepalive = config.network.persistent_keepalive;
-                Ok(PeerOwned { pub_key, endpoint, allowed_ips, persistent_keepalive })
+                Ok(PeerOwned {
+                    pub_key,
+                    endpoint,
+                    allowed_ips,
+                    persistent_keepalive,
+                })
             })
             .collect::<Result<_, PlatformError>>()?;
 
@@ -262,8 +319,7 @@ pub mod linux {
             .flags(vec![set::WgDeviceF::ReplacePeers])
             .peers(peers);
 
-        let mut wg = WgSocket::connect()
-            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        let mut wg = WgSocket::connect().map_err(|e| PlatformError::Interface(e.to_string()))?;
         wg.set_device(dev)
             .map_err(|e| PlatformError::Interface(e.to_string()))?;
 
@@ -313,9 +369,7 @@ pub mod linux {
 
         let updated: Vec<&DaemonPeer> = next_peers
             .iter()
-            .filter(|(k, p)| {
-                prev_peers.get(*k).is_some_and(|old| old != *p)
-            })
+            .filter(|(k, p)| prev_peers.get(*k).is_some_and(|old| old != *p))
             .map(|(_, p)| *p)
             .collect();
 
@@ -334,8 +388,11 @@ pub mod linux {
             update_peers(name, &updated, next.network.persistent_keepalive)?;
         }
 
-        if added.is_empty() && removed.is_empty() && updated.is_empty()
-            && !key_changed && !port_changed
+        if added.is_empty()
+            && removed.is_empty()
+            && updated.is_empty()
+            && !key_changed
+            && !port_changed
         {
             debug!(interface = name, "no device-level changes needed");
         }
@@ -351,8 +408,7 @@ pub mod linux {
             .private_key(&private_key)
             .listen_port(listen_port);
 
-        let mut wg = WgSocket::connect()
-            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        let mut wg = WgSocket::connect().map_err(|e| PlatformError::Interface(e.to_string()))?;
         wg.set_device(dev)
             .map_err(|e| PlatformError::Interface(e.to_string()))?;
 
@@ -365,24 +421,22 @@ pub mod linux {
         persistent_keepalive: i32,
     ) -> Result<PeerOwned, PlatformError> {
         let pub_key = decode_key(&peer.public_key)?;
-        let endpoint: Option<SocketAddr> = peer
-            .endpoint
-            .as_deref()
-            .and_then(|ep| ep.parse().ok());
+        let endpoint: Option<SocketAddr> = peer.endpoint.as_deref().and_then(|ep| ep.parse().ok());
         let allowed_ips: Vec<(IpAddr, u8)> = peer
             .allowed_ips
             .iter()
             .map(|ip| parse_cidr(ip))
             .collect::<Result<_, _>>()?;
-        Ok(PeerOwned { pub_key, endpoint, allowed_ips, persistent_keepalive })
+        Ok(PeerOwned {
+            pub_key,
+            endpoint,
+            allowed_ips,
+            persistent_keepalive,
+        })
     }
 
-    fn build_set_peer<'a>(
-        p: &'a PeerOwned,
-        flags: Vec<set::WgPeerF>,
-    ) -> set::Peer<'a> {
-        let mut peer = set::Peer::from_public_key(&p.pub_key)
-            .flags(flags);
+    fn build_set_peer<'a>(p: &'a PeerOwned, flags: Vec<set::WgPeerF>) -> set::Peer<'a> {
+        let mut peer = set::Peer::from_public_key(&p.pub_key).flags(flags);
 
         if let Some(ref ep) = p.endpoint {
             peer = peer.endpoint(ep);
@@ -422,8 +476,7 @@ pub mod linux {
 
         let dev = set::Device::from_ifname(name).peers(set_peers);
 
-        let mut wg = WgSocket::connect()
-            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        let mut wg = WgSocket::connect().map_err(|e| PlatformError::Interface(e.to_string()))?;
         wg.set_device(dev)
             .map_err(|e| PlatformError::Interface(e.to_string()))?;
         Ok(())
@@ -437,16 +490,12 @@ pub mod linux {
 
         let set_peers: Vec<set::Peer<'_>> = keys
             .iter()
-            .map(|k| {
-                set::Peer::from_public_key(k)
-                    .flags(vec![set::WgPeerF::RemoveMe])
-            })
+            .map(|k| set::Peer::from_public_key(k).flags(vec![set::WgPeerF::RemoveMe]))
             .collect();
 
         let dev = set::Device::from_ifname(name).peers(set_peers);
 
-        let mut wg = WgSocket::connect()
-            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        let mut wg = WgSocket::connect().map_err(|e| PlatformError::Interface(e.to_string()))?;
         wg.set_device(dev)
             .map_err(|e| PlatformError::Interface(e.to_string()))?;
         Ok(())
@@ -464,16 +513,17 @@ pub mod linux {
 
         let set_peers: Vec<set::Peer<'_>> = owned
             .iter()
-            .map(|p| build_set_peer(p, vec![
-                set::WgPeerF::UpdateOnly,
-                set::WgPeerF::ReplaceAllowedIps,
-            ]))
+            .map(|p| {
+                build_set_peer(
+                    p,
+                    vec![set::WgPeerF::UpdateOnly, set::WgPeerF::ReplaceAllowedIps],
+                )
+            })
             .collect();
 
         let dev = set::Device::from_ifname(name).peers(set_peers);
 
-        let mut wg = WgSocket::connect()
-            .map_err(|e| PlatformError::Interface(e.to_string()))?;
+        let mut wg = WgSocket::connect().map_err(|e| PlatformError::Interface(e.to_string()))?;
         wg.set_device(dev)
             .map_err(|e| PlatformError::Interface(e.to_string()))?;
         Ok(())
@@ -487,10 +537,7 @@ pub mod linux {
     }
 
     /// Resolve interface name to its index via rtnetlink.
-    async fn get_link_index(
-        handle: &rtnetlink::Handle,
-        name: &str,
-    ) -> Result<u32, PlatformError> {
+    async fn get_link_index(handle: &rtnetlink::Handle, name: &str) -> Result<u32, PlatformError> {
         let mut links = handle.link().get().match_name(name.to_string()).execute();
         let link = links
             .try_next()
@@ -509,8 +556,7 @@ pub mod linux {
             (addr, prefix)
         };
 
-        let (conn, handle, _) = rtnetlink::new_connection()
-            .map_err(|e| PlatformError::Io(e))?;
+        let (conn, handle, _) = rtnetlink::new_connection().map_err(|e| PlatformError::Io(e))?;
         tokio::spawn(conn);
 
         let index = get_link_index(&handle, name).await?;
@@ -548,15 +594,12 @@ pub mod linux {
     }
 
     async fn set_link_up(name: &str) -> Result<(), PlatformError> {
-        let (conn, handle, _) = rtnetlink::new_connection()
-            .map_err(|e| PlatformError::Io(e))?;
+        let (conn, handle, _) = rtnetlink::new_connection().map_err(|e| PlatformError::Io(e))?;
         tokio::spawn(conn);
 
         let index = get_link_index(&handle, name).await?;
 
-        let msg = rtnetlink::LinkUnspec::new_with_index(index)
-            .up()
-            .build();
+        let msg = rtnetlink::LinkUnspec::new_with_index(index).up().build();
         handle
             .link()
             .set(msg)

@@ -86,10 +86,7 @@ pub async fn save(path: &Path, config: &DaemonToml) -> Result<(), ConfigError> {
     Ok(())
 }
 
-pub fn validate_new_entry(
-    config: &DaemonToml,
-    entry: &ServerEntry,
-) -> Result<(), ConfigError> {
+pub fn validate_new_entry(config: &DaemonToml, entry: &ServerEntry) -> Result<(), ConfigError> {
     for existing in &config.servers {
         if existing.api_token == entry.api_token {
             warn!("api token already registered for another server");
@@ -101,20 +98,6 @@ pub fn validate_new_entry(
         "new entry validated"
     );
     Ok(())
-}
-
-/// Assign interface names (wg0, wg1, ...) to each server entry in order.
-pub fn assign_interfaces(config: &DaemonToml) -> Vec<(&ServerEntry, String)> {
-    config
-        .servers
-        .iter()
-        .enumerate()
-        .map(|(i, entry)| {
-            let name = format!("wg{i}");
-            debug!(interface = %name, api_host = %entry.api_host, "assigned interface");
-            (entry, name)
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -159,24 +142,5 @@ mod tests {
             Ok(()) => assert!(result.is_ok()),
             Err(_) => assert!(result.is_err()),
         }
-    }
-
-    #[test]
-    fn assign_interfaces_sequential() {
-        let config = DaemonToml {
-            servers: vec![
-                ServerEntry {
-                    api_host: "a".into(),
-                    api_token: "a".into(),
-                },
-                ServerEntry {
-                    api_host: "b".into(),
-                    api_token: "b".into(),
-                },
-            ],
-        };
-        let assignments = assign_interfaces(&config);
-        assert_eq!(assignments[0].1, "wg0");
-        assert_eq!(assignments[1].1, "wg1");
     }
 }

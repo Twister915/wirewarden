@@ -14,6 +14,7 @@
 
 pub mod user;
 pub mod vpn;
+pub mod webauthn;
 
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;

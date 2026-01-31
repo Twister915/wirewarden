@@ -30,14 +30,14 @@ async fn daemon_config(
 
     let server_key = store.get_key(server.key_id).await?;
     let address = vpn::compute_address(&network, server.address_offset);
-    let cidr = format!("{}/{}", network.cidr_ip, network.cidr_prefix);
+    let cidr = network.cidr_ip.to_string();
 
     let server_info = DaemonServerInfo {
         id: server.id,
         name: server.name.clone(),
         private_key: server_key.private_key,
         public_key: server_key.public_key,
-        address: format!("{address}/{}", network.cidr_prefix),
+        address: format!("{address}/{}", network.prefix()),
         listen_port: server.endpoint_port,
     };
 

@@ -12,6 +12,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Mutex;
 
@@ -43,13 +44,21 @@ impl Platform for MockPlatform {
         Ok(())
     }
 
-    async fn apply_config(name: &str, _config: &DaemonConfig, _prev: Option<&DaemonConfig>) -> Result<(), PlatformError> {
+    async fn apply_config(
+        name: &str,
+        _config: &DaemonConfig,
+        _prev: Option<&DaemonConfig>,
+    ) -> Result<(), PlatformError> {
         APPLIED.lock().unwrap().push(name.to_string());
         Ok(())
     }
 
     async fn interface_exists(_name: &str) -> Result<bool, PlatformError> {
         Ok(false)
+    }
+
+    async fn list_managed_interfaces() -> Result<HashMap<String, String>, PlatformError> {
+        Ok(HashMap::new())
     }
 }
 
@@ -96,12 +105,30 @@ fn sample_daemon_config() -> DaemonConfig {
     }
 }
 
+/// A second sample config with a different private key.
+fn sample_daemon_config_2() -> DaemonConfig {
+    DaemonConfig {
+        server: DaemonServerInfo {
+            id: Uuid::new_v4(),
+            name: "test-server-2".into(),
+            private_key: "ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQ=".into(), // 32 bytes of 'd'
+            public_key: "ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWU=".into(),
+            address: "10.0.0.3".into(),
+            listen_port: 51821,
+        },
+        network: DaemonNetworkInfo {
+            id: Uuid::new_v4(),
+            name: "test-network".into(),
+            cidr: "10.0.0.0/24".into(),
+            persistent_keepalive: 25,
+        },
+        peers: vec![],
+    }
+}
+
 /// Spawn a tiny HTTP server that responds to GET /api/daemon/config.
 /// Returns (addr, shutdown_sender).
-async fn spawn_mock_api(
-    status: u16,
-    body: &str,
-) -> (SocketAddr, tokio::sync::oneshot::Sender<()>) {
+async fn spawn_mock_api(status: u16, body: &str) -> (SocketAddr, tokio::sync::oneshot::Sender<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let body = body.to_string();
@@ -149,13 +176,13 @@ async fn reconcile_applies_config_from_api() {
             api_token: "test-token".into(),
         }],
     };
-    let mut interfaces = vec!["wg0".to_string()];
 
     let client = reqwest::Client::new();
     let mut state = reconcile::ReconcileState::default();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut state)
+        .await;
 
-    assert_eq!(applied(), vec!["wg0"]);
+    assert_eq!(applied(), vec!["wwg0"]);
     assert!(removed().is_empty());
     assert_eq!(daemon_config.servers.len(), 1, "server entry should remain");
 }
@@ -164,9 +191,10 @@ async fn reconcile_applies_config_from_api() {
 async fn reconcile_multiple_servers() {
     let _guard = lock_and_clear();
 
-    let body = serde_json::to_string(&sample_daemon_config()).unwrap();
-    let (addr1, _s1) = spawn_mock_api(200, &body).await;
-    let (addr2, _s2) = spawn_mock_api(200, &body).await;
+    let body1 = serde_json::to_string(&sample_daemon_config()).unwrap();
+    let body2 = serde_json::to_string(&sample_daemon_config_2()).unwrap();
+    let (addr1, _s1) = spawn_mock_api(200, &body1).await;
+    let (addr2, _s2) = spawn_mock_api(200, &body2).await;
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let config_path = tmp.path().to_path_buf();
@@ -183,15 +211,15 @@ async fn reconcile_multiple_servers() {
             },
         ],
     };
-    let mut interfaces = vec!["wg0".to_string(), "wg1".to_string()];
 
     let client = reqwest::Client::new();
     let mut state = reconcile::ReconcileState::default();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut state)
+        .await;
 
     let mut apps = applied();
     apps.sort();
-    assert_eq!(apps, vec!["wg0", "wg1"]);
+    assert_eq!(apps, vec!["wwg0", "wwg1"]);
     assert_eq!(daemon_config.servers.len(), 2);
 }
 
@@ -205,7 +233,9 @@ async fn reconcile_removes_server_on_401() {
     let config_path = tmp.path().to_path_buf();
 
     // Seed the file so save can overwrite it
-    config::save(&config_path, &DaemonToml { servers: vec![] }).await.unwrap();
+    config::save(&config_path, &DaemonToml { servers: vec![] })
+        .await
+        .unwrap();
 
     let mut daemon_config = DaemonToml {
         servers: vec![ServerEntry {
@@ -213,16 +243,17 @@ async fn reconcile_removes_server_on_401() {
             api_token: "revoked-token".into(),
         }],
     };
-    let mut interfaces = vec!["wg0".to_string()];
 
     let client = reqwest::Client::new();
     let mut state = reconcile::ReconcileState::default();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut state)
+        .await;
 
     assert!(applied().is_empty(), "should not apply config on 401");
-    assert_eq!(removed(), vec!["wg0"], "should tear down interface");
-    assert!(daemon_config.servers.is_empty(), "should remove entry from config");
-    assert!(interfaces.is_empty(), "should remove interface from list");
+    assert!(
+        daemon_config.servers.is_empty(),
+        "should remove entry from config"
+    );
 
     // Verify file was updated
     let reloaded = config::load(&config_path).await.unwrap();
@@ -237,7 +268,9 @@ async fn reconcile_removes_server_on_404() {
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let config_path = tmp.path().to_path_buf();
-    config::save(&config_path, &DaemonToml { servers: vec![] }).await.unwrap();
+    config::save(&config_path, &DaemonToml { servers: vec![] })
+        .await
+        .unwrap();
 
     let mut daemon_config = DaemonToml {
         servers: vec![ServerEntry {
@@ -245,14 +278,13 @@ async fn reconcile_removes_server_on_404() {
             api_token: "deleted-server-token".into(),
         }],
     };
-    let mut interfaces = vec!["wg0".to_string()];
 
     let client = reqwest::Client::new();
     let mut state = reconcile::ReconcileState::default();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut state)
+        .await;
 
     assert!(applied().is_empty());
-    assert_eq!(removed(), vec!["wg0"]);
     assert!(daemon_config.servers.is_empty());
 }
 
@@ -271,15 +303,19 @@ async fn reconcile_keeps_server_on_transient_error() {
             api_token: "some-token".into(),
         }],
     };
-    let mut interfaces = vec!["wg0".to_string()];
 
     let client = reqwest::Client::new();
     let mut state = reconcile::ReconcileState::default();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut state)
+        .await;
 
     assert!(applied().is_empty());
     assert!(removed().is_empty());
-    assert_eq!(daemon_config.servers.len(), 1, "should keep entry for retry");
+    assert_eq!(
+        daemon_config.servers.len(),
+        1,
+        "should keep entry for retry"
+    );
 }
 
 #[tokio::test]
@@ -292,7 +328,9 @@ async fn reconcile_mixed_success_and_gone() {
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let config_path = tmp.path().to_path_buf();
-    config::save(&config_path, &DaemonToml { servers: vec![] }).await.unwrap();
+    config::save(&config_path, &DaemonToml { servers: vec![] })
+        .await
+        .unwrap();
 
     let mut daemon_config = DaemonToml {
         servers: vec![
@@ -306,16 +344,14 @@ async fn reconcile_mixed_success_and_gone() {
             },
         ],
     };
-    let mut interfaces = vec!["wg0".to_string(), "wg1".to_string()];
 
     let client = reqwest::Client::new();
     let mut state = reconcile::ReconcileState::default();
-    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut interfaces, &mut state).await;
+    reconcile::reconcile_all::<MockPlatform>(&client, &config_path, &mut daemon_config, &mut state)
+        .await;
 
-    assert_eq!(applied(), vec!["wg0"]);
-    assert_eq!(removed(), vec!["wg1"]);
+    assert_eq!(applied(), vec!["wwg0"]);
     assert_eq!(daemon_config.servers.len(), 1);
-    assert_eq!(interfaces, vec!["wg0"]);
 }
 
 #[tokio::test]
@@ -355,26 +391,6 @@ async fn connect_writes_config_and_validates() {
         api_token: "aaaa".into(),
     };
     assert!(config::validate_new_entry(&cfg, &dup_token).is_err());
-}
-
-#[tokio::test]
-async fn assign_interfaces_sequential() {
-    let cfg = DaemonToml {
-        servers: vec![
-            ServerEntry {
-                api_host: "a".into(),
-                api_token: "a".into(),
-            },
-            ServerEntry {
-                api_host: "b".into(),
-                api_token: "b".into(),
-            },
-        ],
-    };
-
-    let assignments = config::assign_interfaces(&cfg);
-    assert_eq!(assignments[0].1, "wg0");
-    assert_eq!(assignments[1].1, "wg1");
 }
 
 #[tokio::test]

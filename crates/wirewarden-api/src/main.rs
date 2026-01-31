@@ -19,9 +19,8 @@ mod error;
 mod extract;
 mod middleware;
 mod routes;
-mod webauthn;
 
-use actix_web::{web, App, HttpResponse, HttpServer};
+use actix_web::{App, HttpResponse, HttpServer, web};
 use tracing::{info, warn};
 
 use crate::config::Config;
@@ -48,10 +47,9 @@ async fn seed_admin(store: &UserStore) {
 }
 
 fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
 
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     #[cfg(distribute)]
     {
@@ -82,8 +80,8 @@ async fn main() -> std::io::Result<()> {
 
     let user_store = UserStore::new(pool.clone());
     seed_admin(&user_store).await;
-    let webauthn = webauthn::build_webauthn(&config);
-    let challenge_store = webauthn::ChallengeStore::new(pool.clone());
+    let webauthn = db::webauthn::build_webauthn(&config);
+    let challenge_store = db::webauthn::ChallengeStore::new(pool.clone());
     let vpn_store = VpnStore::new(pool.clone(), config.wg_key_secret);
 
     {

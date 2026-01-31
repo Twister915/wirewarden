@@ -20,10 +20,9 @@ use tracing::{debug, error, info, warn};
 use wirewarden_daemon::{config, netlink, reconcile};
 
 fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
 
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     #[cfg(distribute)]
     {
@@ -111,11 +110,6 @@ async fn run_daemon(
         );
     }
 
-    let mut interfaces: Vec<String> = config::assign_interfaces(&daemon_config)
-        .into_iter()
-        .map(|(_, name)| name)
-        .collect();
-
     let client = reqwest::Client::new();
     let interval = Duration::from_secs(interval_secs);
     let mut reconcile_state = reconcile::ReconcileState::default();
@@ -133,7 +127,6 @@ async fn run_daemon(
             &client,
             &config_path,
             &mut daemon_config,
-            &mut interfaces,
             &mut reconcile_state,
         )
         .await;
@@ -156,14 +149,8 @@ async fn run_daemon(
                 if new_count != old_count {
                     info!(
                         old_count,
-                        new_count,
-                        "config reloaded, server count changed"
+                        new_count, "config reloaded, server count changed"
                     );
-                    // Re-assign interfaces for any new entries
-                    interfaces = config::assign_interfaces(&fresh)
-                        .into_iter()
-                        .map(|(_, name)| name)
-                        .collect();
                 } else {
                     debug!(server_count = new_count, "config reloaded, no changes");
                 }
@@ -173,7 +160,8 @@ async fn run_daemon(
         }
     }
 
-    teardown_interfaces::<netlink::CurrentPlatform>(&interfaces).await;
+    let ifaces: Vec<&str> = reconcile_state.interface_names().collect();
+    teardown_interfaces::<netlink::CurrentPlatform>(&ifaces).await;
     info!("shutdown complete");
     Ok(())
 }
@@ -183,9 +171,8 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to register SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
         tokio::select! {
             _ = ctrl_c => {}
             _ = sigterm.recv() => {}
@@ -198,7 +185,7 @@ async fn shutdown_signal() {
     }
 }
 
-async fn teardown_interfaces<P: netlink::Platform>(interfaces: &[String]) {
+async fn teardown_interfaces<P: netlink::Platform>(interfaces: &[&str]) {
     if interfaces.is_empty() {
         return;
     }
