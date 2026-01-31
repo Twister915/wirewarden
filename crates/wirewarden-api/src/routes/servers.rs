@@ -113,6 +113,11 @@ async fn create_server(
         )
         .await?;
 
+    let clients = store.list_clients_by_network(body.network_id).await?;
+    for client in &clients {
+        store.create_preshared_key(server.id, client.id).await?;
+    }
+
     let resp = build_response(&store, server, true, &config.public_url).await?;
     Ok(HttpResponse::Created().json(resp))
 }

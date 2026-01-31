@@ -224,6 +224,9 @@ export const vpnApi = {
   deleteClient(id: string) {
     return api<{ status: string }>(`/clients/${id}`, { method: 'DELETE' });
   },
+  rotatePresharedKeys(id: string) {
+    return api<void>(`/clients/${id}/rotate-preshared-keys`, { method: 'POST' });
+  },
   clientConfig(id: string, forwardInternet: boolean) {
     const q = forwardInternet ? '?forward_internet=true' : '';
     return api<{ config: string }>(`/clients/${id}/config${q}`);

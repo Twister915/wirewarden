@@ -78,6 +78,17 @@ export function ClientDetailPage() {
     URL.revokeObjectURL(url);
   }
 
+  async function handleRotatePsk() {
+    if (!id) return;
+    setError('');
+    try {
+      await vpnApi.rotatePresharedKeys(id);
+      if (configLoaded) fetchConfig(forwardInternet);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to rotate preshared keys');
+    }
+  }
+
   if (!client) return <div className="vpn-page"><p>Loading…</p></div>;
 
   return (
@@ -101,6 +112,7 @@ export function ClientDetailPage() {
           Forward internet traffic
         </label>
         <button type="button" onClick={() => fetchConfig(forwardInternet)}>Load config</button>
+        <button type="button" onClick={handleRotatePsk}>Rotate Preshared Keys</button>
         {config && <button type="button" onClick={handleDownload}>Download</button>}
         {config && (
           <button type="button" onClick={() => setShowQr((v) => !v)}>
