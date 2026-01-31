@@ -228,6 +228,9 @@ export const vpnApi = {
     const q = forwardInternet ? '?forward_internet=true' : '';
     return api<{ config: string }>(`/clients/${id}/config${q}`);
   },
+  rotateClientPsk(id: string) {
+    return api<void>(`/clients/${id}/psk/rotate`, { method: 'POST' });
+  },
 
   listRoutes(serverId: string) {
     return api<RouteResponse[]>(`/servers/${serverId}/routes`);

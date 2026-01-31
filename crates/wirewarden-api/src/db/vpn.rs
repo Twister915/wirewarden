@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::net::Ipv4Addr;
 
-use aes_gcm::aead::{Aead, OsRng};
+use aes_gcm::aead::{Aead, OsRng, rand_core::RngCore};
 use aes_gcm::{AeadCore, Aes256Gcm, KeyInit, Nonce};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -65,6 +65,23 @@ struct WgKeyRow {
     public_key: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct WgPeerPskRow {
+    id: Uuid,
+    server_id: Uuid,
+    client_id: Uuid,
+    psk_enc: Vec<u8>,
+    psk_nonce: Vec<u8>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct MissingPskPair {
+    server_id: Uuid,
+    client_id: Uuid,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -144,6 +161,9 @@ pub enum VpnStoreError {
     #[error("server not found")]
     ServerNotFound,
 
+    #[error("preshared key missing")]
+    PskNotFound,
+
     #[error("no available address offsets in this network")]
     NetworkFull,
 
@@ -185,7 +205,7 @@ impl VpnStore {
 
     // -- Encryption helpers --------------------------------------------------
 
-    fn encrypt_private_key(&self, plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    fn encrypt_secret(&self, plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
         let cipher = Aes256Gcm::new_from_slice(&self.encryption_key)
             .map_err(|_| VpnStoreError::KeyEncryption)?;
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -195,7 +215,7 @@ impl VpnStore {
         Ok((ciphertext, nonce.to_vec()))
     }
 
-    fn decrypt_private_key(&self, ciphertext: &[u8], nonce_bytes: &[u8]) -> Result<Vec<u8>> {
+    fn decrypt_secret(&self, ciphertext: &[u8], nonce_bytes: &[u8]) -> Result<Vec<u8>> {
         let cipher = Aes256Gcm::new_from_slice(&self.encryption_key)
             .map_err(|_| VpnStoreError::KeyEncryption)?;
         let nonce =
@@ -205,8 +225,19 @@ impl VpnStore {
             .map_err(|_| VpnStoreError::KeyEncryption)
     }
 
+    fn decrypt_psk_row(&self, row: WgPeerPskRow) -> Result<String> {
+        let plaintext = self.decrypt_secret(&row.psk_enc, &row.psk_nonce)?;
+        Ok(BASE64.encode(&plaintext))
+    }
+
+    fn generate_psk() -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        let mut rng = OsRng;
+        rng.fill_bytes(&mut bytes);
+        bytes
+    }
     fn decrypt_key_row(&self, row: WgKeyRow) -> Result<WgKey> {
-        let plaintext = self.decrypt_private_key(&row.private_key_enc, &row.private_key_nonce)?;
+        let plaintext = self.decrypt_secret(&row.private_key_enc, &row.private_key_nonce)?;
         Ok(WgKey {
             id: row.id,
             private_key: BASE64.encode(&plaintext),
@@ -300,7 +331,7 @@ impl VpnStore {
         let public = PublicKey::from(&secret);
 
         let private_bytes = secret.to_bytes();
-        let (enc, nonce) = self.encrypt_private_key(&private_bytes)?;
+        let (enc, nonce) = self.encrypt_secret(&private_bytes)?;
         let public_b64 = BASE64.encode(public.as_bytes());
 
         let row = sqlx::query_as::<_, WgKeyRow>(
@@ -535,6 +566,112 @@ impl VpnStore {
         Ok(())
     }
 
+    // -- Preshared key backfill --------------------------------------------
+
+    #[tracing::instrument(skip(self))]
+    pub async fn backfill_psks(&self) -> Result<()> {
+        let missing: Vec<MissingPskPair> = sqlx::query_as(
+            "SELECT s.id AS server_id, c.id AS client_id
+             FROM wg_servers s
+             JOIN wg_clients c ON c.network_id = s.network_id
+             LEFT JOIN wg_peer_psks p
+               ON p.server_id = s.id AND p.client_id = c.id
+             WHERE p.id IS NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        for pair in &missing {
+            let psk = Self::generate_psk();
+            self.insert_psk(pair.server_id, pair.client_id, &psk)
+                .await?;
+        }
+
+        tracing::info!(missing = missing.len(), "preshared key backfill complete");
+        Ok(())
+    }
+
+    // -- Preshared key management ------------------------------------------
+
+    #[tracing::instrument(skip(self))]
+    async fn get_psk_row(
+        &self,
+        server_id: Uuid,
+        client_id: Uuid,
+    ) -> Result<Option<WgPeerPskRow>> {
+        sqlx::query_as::<_, WgPeerPskRow>(
+            "SELECT * FROM wg_peer_psks WHERE server_id = $1 AND client_id = $2",
+        )
+        .bind(server_id)
+        .bind(client_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    #[tracing::instrument(skip(self, psk_bytes))]
+    async fn insert_psk(
+        &self,
+        server_id: Uuid,
+        client_id: Uuid,
+        psk_bytes: &[u8],
+    ) -> Result<()> {
+        let (enc, nonce) = self.encrypt_secret(psk_bytes)?;
+        sqlx::query(
+            "INSERT INTO wg_peer_psks (server_id, client_id, psk_enc, psk_nonce)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (server_id, client_id) DO NOTHING",
+        )
+        .bind(server_id)
+        .bind(client_id)
+        .bind(&enc)
+        .bind(&nonce)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn ensure_psk(&self, server_id: Uuid, client_id: Uuid) -> Result<String> {
+        if let Some(row) = self.get_psk_row(server_id, client_id).await? {
+            return self.decrypt_psk_row(row);
+        }
+
+        let psk = Self::generate_psk();
+        self.insert_psk(server_id, client_id, &psk).await?;
+
+        let row = self
+            .get_psk_row(server_id, client_id)
+            .await?
+            .ok_or(VpnStoreError::PskNotFound)?;
+        self.decrypt_psk_row(row)
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn rotate_psks_for_client(
+        &self,
+        client_id: Uuid,
+        server_ids: &[Uuid],
+    ) -> Result<()> {
+        for server_id in server_ids {
+            let psk = Self::generate_psk();
+            let (enc, nonce) = self.encrypt_secret(&psk)?;
+            sqlx::query(
+                "INSERT INTO wg_peer_psks (server_id, client_id, psk_enc, psk_nonce)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (server_id, client_id)
+                 DO UPDATE SET psk_enc = $3, psk_nonce = $4, updated_at = now()",
+            )
+            .bind(server_id)
+            .bind(client_id)
+            .bind(&enc)
+            .bind(&nonce)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
     // -- WgServerRoute CRUD --------------------------------------------------
 
     #[tracing::instrument(skip(self))]
@@ -692,6 +829,7 @@ impl WgClient {
         key: &WgKey,
         snapshot: &NetworkSnapshot,
         forward_internet: bool,
+        preshared_keys: &HashMap<Uuid, String>,
     ) -> String {
         let client_ip = compute_address(&snapshot.network, self.address_offset);
         let prefix = snapshot.network.prefix();
@@ -769,6 +907,9 @@ impl WgClient {
             writeln!(config, "[Peer]").unwrap();
             let server_key = &snapshot.keys[&server.key_id];
             writeln!(config, "PublicKey = {}", server_key.public_key).unwrap();
+            if let Some(psk) = preshared_keys.get(&server.id) {
+                writeln!(config, "PresharedKey = {}", psk).unwrap();
+            }
             writeln!(config, "Endpoint = {endpoint_host}:{}", server.endpoint_port).unwrap();
             writeln!(config, "AllowedIPs = {}", allowed_ips.join(", ")).unwrap();
             if snapshot.network.persistent_keepalive > 0 {
@@ -924,6 +1065,16 @@ mod tests {
         }
     }
 
+    fn render_config(
+        client: &WgClient,
+        key: &WgKey,
+        snapshot: &NetworkSnapshot,
+        forward_internet: bool,
+    ) -> String {
+        let preshared_keys = HashMap::new();
+        client.wg_quick_config(key, snapshot, forward_internet, &preshared_keys)
+    }
+
     // -- Config generation tests ---------------------------------------------
 
     #[test]
@@ -939,7 +1090,7 @@ mod tests {
         let client = make_client(Uuid::new_v4(), ck, 2);
 
         let snapshot = make_snapshot(network, vec![server], vec![skey], HashMap::new());
-        let config = client.wg_quick_config(&ckey, &snapshot, false);
+        let config = render_config(&client, &ckey, &snapshot, false);
 
         assert!(config.contains("PrivateKey = client-priv"));
         assert!(config.contains("Address = 10.0.1.2/24"));
@@ -947,6 +1098,26 @@ mod tests {
         assert!(config.contains("PublicKey = server-pub"));
         assert!(config.contains("Endpoint = vpn.example.com:51820"));
         assert!(config.contains("AllowedIPs = 10.0.1.0/24"));
+    }
+
+    #[test]
+    fn test_single_server_includes_psk() {
+        let network = make_network("10.0.2.0/24", &[]);
+        let sk = Uuid::new_v4();
+        let ck = Uuid::new_v4();
+        let sid = Uuid::new_v4();
+
+        let server = make_server(sid, sk, 1, false, Some("vpn.example.com"), 51820);
+        let skey = make_key(sk, "server-priv", "server-pub");
+        let ckey = make_key(ck, "client-priv", "client-pub");
+        let client = make_client(Uuid::new_v4(), ck, 2);
+
+        let snapshot = make_snapshot(network, vec![server], vec![skey], HashMap::new());
+        let mut preshared_keys = HashMap::new();
+        preshared_keys.insert(sid, "psk-base64".to_string());
+
+        let config = client.wg_quick_config(&ckey, &snapshot, false, &preshared_keys);
+        assert!(config.contains("PresharedKey = psk-base64"));
     }
 
     #[test]
@@ -962,7 +1133,7 @@ mod tests {
         let client = make_client(Uuid::new_v4(), ck, 2);
 
         let snapshot = make_snapshot(network, vec![server], vec![skey], HashMap::new());
-        let config = client.wg_quick_config(&ckey, &snapshot, true);
+        let config = render_config(&client, &ckey, &snapshot, true);
 
         // Should NOT have a DNS line (empty dns_servers)
         assert!(!config.contains("DNS ="));
@@ -987,7 +1158,7 @@ mod tests {
         let client = make_client(Uuid::new_v4(), ck, 2);
 
         let snapshot = make_snapshot(network, vec![server], vec![skey], HashMap::new());
-        let config = client.wg_quick_config(&ckey, &snapshot, false);
+        let config = render_config(&client, &ckey, &snapshot, false);
 
         // Only VPN CIDR, no public ranges
         assert!(config.contains("AllowedIPs = 10.0.1.0/24"));
@@ -1019,7 +1190,7 @@ mod tests {
             vec![skey1, skey2],
             HashMap::new(),
         );
-        let config = client.wg_quick_config(&ckey, &snapshot, false);
+        let config = render_config(&client, &ckey, &snapshot, false);
 
         // First server gets the full network CIDR
         // Second server gets only its /32
@@ -1087,7 +1258,7 @@ mod tests {
         routes.insert(sid2, vec![make_route(sid2, "172.17.0.0/24")]);
 
         let snapshot = make_snapshot(network, vec![s1, s2], vec![skey1, skey2], routes);
-        let config = client.wg_quick_config(&ckey, &snapshot, false);
+        let config = render_config(&client, &ckey, &snapshot, false);
 
         // s1 gets VPN CIDR + 172.16.0.0/24
         // s2 gets its /32 + 172.17.0.0/24 (VPN CIDR already claimed by s1)
@@ -1120,7 +1291,7 @@ mod tests {
         routes.insert(sid2, vec![make_route(sid2, "172.16.0.0/16")]);
 
         let snapshot = make_snapshot(network, vec![s1, s2], vec![skey1, skey2], routes);
-        let config = client.wg_quick_config(&ckey, &snapshot, false);
+        let config = render_config(&client, &ckey, &snapshot, false);
 
         // First server wins the route; count occurrences
         let allowed_lines: Vec<&str> = config
@@ -1147,7 +1318,7 @@ mod tests {
         let client = make_client(Uuid::new_v4(), ck, 2);
 
         let snapshot = make_snapshot(network, vec![server], vec![skey], HashMap::new());
-        let config = client.wg_quick_config(&ckey, &snapshot, false);
+        let config = render_config(&client, &ckey, &snapshot, false);
 
         assert!(!config.contains("[Peer]"));
     }
@@ -1160,7 +1331,7 @@ mod tests {
         let client = make_client(Uuid::new_v4(), ck, 2);
 
         let snapshot = make_snapshot(network, vec![], vec![], HashMap::new());
-        let config = client.wg_quick_config(&ckey, &snapshot, true);
+        let config = render_config(&client, &ckey, &snapshot, true);
 
         assert!(config.contains("DNS = 1.1.1.1, 8.8.8.8"));
     }
@@ -1173,7 +1344,7 @@ mod tests {
         let client = make_client(Uuid::new_v4(), ck, 2);
 
         let snapshot = make_snapshot(network, vec![], vec![], HashMap::new());
-        let config = client.wg_quick_config(&ckey, &snapshot, false);
+        let config = render_config(&client, &ckey, &snapshot, false);
 
         assert!(!config.contains("DNS ="));
     }
@@ -1186,7 +1357,7 @@ mod tests {
         let client = make_client(Uuid::new_v4(), ck, 2);
 
         let snapshot = make_snapshot(network, vec![], vec![], HashMap::new());
-        let config = client.wg_quick_config(&ckey, &snapshot, false);
+        let config = render_config(&client, &ckey, &snapshot, false);
 
         assert!(!config.contains("DNS"));
     }

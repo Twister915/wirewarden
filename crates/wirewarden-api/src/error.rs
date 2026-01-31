@@ -108,7 +108,9 @@ impl From<VpnStoreError> for ApiError {
             VpnStoreError::NetworkNotFound
             | VpnStoreError::KeyNotFound
             | VpnStoreError::ServerNotFound => Self::NotFound,
-            VpnStoreError::Database(_) | VpnStoreError::KeyEncryption => {
+            VpnStoreError::PskNotFound
+            | VpnStoreError::Database(_)
+            | VpnStoreError::KeyEncryption => {
                 tracing::error!(error = %err, "vpn store error");
                 Self::Internal
             }
