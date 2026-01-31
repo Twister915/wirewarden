@@ -45,4 +45,5 @@ pub struct DaemonPeer {
     pub public_key: String,
     pub allowed_ips: Vec<String>,
     pub endpoint: Option<String>,
+    pub preshared_key: Option<String>,
 }

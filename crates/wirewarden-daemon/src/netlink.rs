@@ -266,23 +266,7 @@ pub mod linux {
         let peer_data: Vec<PeerOwned> = config
             .peers
             .iter()
-            .map(|p| {
-                let pub_key = decode_key(&p.public_key)?;
-                let endpoint: Option<SocketAddr> =
-                    p.endpoint.as_deref().and_then(|ep| ep.parse().ok());
-                let allowed_ips: Vec<(IpAddr, u8)> = p
-                    .allowed_ips
-                    .iter()
-                    .map(|ip| parse_cidr(ip))
-                    .collect::<Result<_, _>>()?;
-                let persistent_keepalive = config.network.persistent_keepalive;
-                Ok(PeerOwned {
-                    pub_key,
-                    endpoint,
-                    allowed_ips,
-                    persistent_keepalive,
-                })
-            })
+            .map(|p| build_peer_owned(p, config.network.persistent_keepalive))
             .collect::<Result<_, PlatformError>>()?;
 
         let peers: Vec<set::Peer<'_>> = peer_data
@@ -422,6 +406,10 @@ pub mod linux {
     ) -> Result<PeerOwned, PlatformError> {
         let pub_key = decode_key(&peer.public_key)?;
         let endpoint: Option<SocketAddr> = peer.endpoint.as_deref().and_then(|ep| ep.parse().ok());
+        let preshared_key = match peer.preshared_key.as_deref() {
+            Some(psk) => Some(decode_key(psk)?),
+            None => None,
+        };
         let allowed_ips: Vec<(IpAddr, u8)> = peer
             .allowed_ips
             .iter()
@@ -432,6 +420,7 @@ pub mod linux {
             endpoint,
             allowed_ips,
             persistent_keepalive,
+            preshared_key,
         })
     }
 
@@ -440,6 +429,9 @@ pub mod linux {
 
         if let Some(ref ep) = p.endpoint {
             peer = peer.endpoint(ep);
+        }
+        if let Some(ref psk) = p.preshared_key {
+            peer = peer.preshared_key(psk);
         }
 
         let allowed: Vec<set::AllowedIp<'_>> = p
@@ -534,6 +526,7 @@ pub mod linux {
         endpoint: Option<SocketAddr>,
         allowed_ips: Vec<(IpAddr, u8)>,
         persistent_keepalive: i32,
+        preshared_key: Option<[u8; 32]>,
     }
 
     /// Resolve interface name to its index via rtnetlink.
