@@ -275,9 +275,15 @@ pub mod linux {
                     .iter()
                     .map(|ip| parse_cidr(ip))
                     .collect::<Result<_, _>>()?;
+                let preshared_key = p
+                    .preshared_key
+                    .as_deref()
+                    .map(decode_key)
+                    .transpose()?;
                 let persistent_keepalive = config.network.persistent_keepalive;
                 Ok(PeerOwned {
                     pub_key,
+                    preshared_key,
                     endpoint,
                     allowed_ips,
                     persistent_keepalive,
@@ -427,8 +433,14 @@ pub mod linux {
             .iter()
             .map(|ip| parse_cidr(ip))
             .collect::<Result<_, _>>()?;
+        let preshared_key = peer
+            .preshared_key
+            .as_deref()
+            .map(decode_key)
+            .transpose()?;
         Ok(PeerOwned {
             pub_key,
+            preshared_key,
             endpoint,
             allowed_ips,
             persistent_keepalive,
@@ -437,6 +449,10 @@ pub mod linux {
 
     fn build_set_peer<'a>(p: &'a PeerOwned, flags: Vec<set::WgPeerF>) -> set::Peer<'a> {
         let mut peer = set::Peer::from_public_key(&p.pub_key).flags(flags);
+
+        if let Some(ref psk) = p.preshared_key {
+            peer = peer.preshared_key(psk);
+        }
 
         if let Some(ref ep) = p.endpoint {
             peer = peer.endpoint(ep);
@@ -531,6 +547,7 @@ pub mod linux {
 
     struct PeerOwned {
         pub_key: [u8; 32],
+        preshared_key: Option<[u8; 32]>,
         endpoint: Option<SocketAddr>,
         allowed_ips: Vec<(IpAddr, u8)>,
         persistent_keepalive: i32,

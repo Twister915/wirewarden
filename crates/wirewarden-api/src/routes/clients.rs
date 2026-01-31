@@ -73,6 +73,11 @@ async fn create_client(
         .create_client(body.network_id, &body.name, key.id)
         .await?;
 
+    let servers = store.list_servers_by_network(body.network_id).await?;
+    for server in &servers {
+        store.create_preshared_key(server.id, client.id).await?;
+    }
+
     let resp = build_response(&store, client).await?;
     Ok(HttpResponse::Created().json(resp))
 }
@@ -159,9 +164,20 @@ async fn client_config(
         }
     }
 
-    let config = client.wg_quick_config(&key, &snapshot, query.forward_internet);
+    let preshared_keys = store.get_preshared_keys_for_client(id).await?;
+    let config = client.wg_quick_config(&key, &snapshot, &preshared_keys, query.forward_internet);
 
     Ok(HttpResponse::Ok().json(serde_json::json!({ "config": config })))
+}
+
+async fn rotate_preshared_keys(
+    _auth: AuthUser,
+    store: web::Data<VpnStore>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse, ApiError> {
+    let client_id = path.into_inner();
+    store.rotate_preshared_keys(client_id).await?;
+    Ok(HttpResponse::NoContent().finish())
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -177,6 +193,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     .service(
         web::resource("/api/clients/{id}/config")
             .route(web::get().to(client_config)),
+    )
+    .service(
+        web::resource("/api/clients/{id}/rotate-preshared-keys")
+            .route(web::post().to(rotate_preshared_keys)),
     )
     ;
 }

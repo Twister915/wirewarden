@@ -101,6 +101,7 @@ fn sample_daemon_config() -> DaemonConfig {
             public_key: "Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYWE=".into(),
             allowed_ips: vec!["10.0.0.2/32".into()],
             endpoint: None,
+            preshared_key: None,
         }],
     }
 }
