@@ -73,6 +73,11 @@ async fn create_client(
         .create_client(body.network_id, &body.name, key.id)
         .await?;
 
+    let servers = store.list_servers_by_network(client.network_id).await?;
+    for server in &servers {
+        store.ensure_psk(server.id, client.id).await?;
+    }
+
     let resp = build_response(&store, client).await?;
     Ok(HttpResponse::Created().json(resp))
 }
@@ -150,6 +155,12 @@ async fn client_config(
 
     let snapshot = store.load_network_snapshot(client.network_id).await?;
 
+    let mut preshared_keys = std::collections::HashMap::new();
+    for server in &snapshot.servers {
+        let psk = store.ensure_psk(server.id, client.id).await?;
+        preshared_keys.insert(server.id, psk);
+    }
+
     // Load client keys into snapshot keys map
     let mut snapshot = snapshot;
     for srv in &snapshot.servers {
@@ -159,9 +170,27 @@ async fn client_config(
         }
     }
 
-    let config = client.wg_quick_config(&key, &snapshot, query.forward_internet);
+    let config = client.wg_quick_config(
+        &key,
+        &snapshot,
+        query.forward_internet,
+        &preshared_keys,
+    );
 
     Ok(HttpResponse::Ok().json(serde_json::json!({ "config": config })))
+}
+
+async fn rotate_client_psk(
+    _auth: AuthUser,
+    store: web::Data<VpnStore>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse, ApiError> {
+    let id = path.into_inner();
+    let client = store.get_client(id).await?.ok_or(ApiError::NotFound)?;
+    let servers = store.list_servers_by_network(client.network_id).await?;
+    let server_ids: Vec<_> = servers.iter().map(|s| s.id).collect();
+    store.rotate_psks_for_client(client.id, &server_ids).await?;
+    Ok(HttpResponse::NoContent().finish())
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -177,6 +206,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     .service(
         web::resource("/api/clients/{id}/config")
             .route(web::get().to(client_config)),
+    )
+    .service(
+        web::resource("/api/clients/{id}/psk/rotate")
+            .route(web::post().to(rotate_client_psk)),
     )
     ;
 }

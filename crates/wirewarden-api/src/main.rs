@@ -83,6 +83,10 @@ async fn main() -> std::io::Result<()> {
     let webauthn = db::webauthn::build_webauthn(&config);
     let challenge_store = db::webauthn::ChallengeStore::new(pool.clone());
     let vpn_store = VpnStore::new(pool.clone(), config.wg_key_secret);
+    vpn_store
+        .backfill_psks()
+        .await
+        .expect("failed to backfill preshared keys");
 
     {
         let cs = challenge_store.clone();

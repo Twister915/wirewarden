@@ -27,6 +27,7 @@ export function ClientDetailPage() {
   const [error, setError] = useState('');
   const [showQr, setShowQr] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
+  const [rotating, setRotating] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -50,6 +51,23 @@ export function ClientDetailPage() {
       setError(err instanceof ApiError ? err.message : 'Failed to load config');
     }
   }, [id]);
+
+  const rotatePsk = useCallback(async () => {
+    if (!id) return;
+    if (!confirm('Rotate preshared key? Existing configs will stop working.')) return;
+    setError('');
+    setRotating(true);
+    try {
+      await vpnApi.rotateClientPsk(id);
+      if (configLoaded) {
+        await fetchConfig(forwardInternet);
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to rotate preshared key');
+    } finally {
+      setRotating(false);
+    }
+  }, [id, configLoaded, fetchConfig, forwardInternet]);
 
   useEffect(() => {
     if (!showQr || !config) { setQrDataUrl(''); return; }
@@ -107,6 +125,9 @@ export function ClientDetailPage() {
             {showQr ? 'Hide QR code' : 'Show QR code'}
           </button>
         )}
+        <button type="button" onClick={rotatePsk} disabled={rotating}>
+          {rotating ? 'Rotating…' : 'Rotate preshared key'}
+        </button>
       </div>
 
       {qrDataUrl && <img src={qrDataUrl} alt="WireGuard config QR code" className="qr-code" />}

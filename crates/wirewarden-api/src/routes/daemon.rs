@@ -94,16 +94,19 @@ async fn daemon_config(
             public_key: key.public_key.clone(),
             allowed_ips,
             endpoint,
+            preshared_key: None,
         });
     }
 
     for client in &clients {
         let key = &keys[&client.key_id];
         let ip = vpn::compute_address(&network, client.address_offset);
+        let preshared_key = store.ensure_psk(server.id, client.id).await?;
         peers.push(DaemonPeer {
             public_key: key.public_key.clone(),
             allowed_ips: vec![format!("{ip}/32")],
             endpoint: None,
+            preshared_key: Some(preshared_key),
         });
     }
 
